@@ -1,4 +1,5 @@
 # src/integrations/telegram/bot.py
+# uv run python -m src.integrations.telegram.bot
 from __future__ import annotations
 
 import asyncio

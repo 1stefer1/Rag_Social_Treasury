@@ -15,4 +15,7 @@ dependencies = [
     "numpy>=2.0.0",
     "httpx>=0.28.1",
     "python-telegram-bot>=21.0",
+    "openpyxl>=3.1.5",
+    "ragas>=0.4.3",
+    "tqdm>=4.67.1",
 ]
