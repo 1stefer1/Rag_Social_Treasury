@@ -18,7 +18,6 @@ class RetrievedChunk:
     """
     Результат ретривала, который удобно отдавать в генератор.
     """
-
     id: str
     score: float
     text: str

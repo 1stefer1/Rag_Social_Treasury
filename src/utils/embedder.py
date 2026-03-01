@@ -12,14 +12,12 @@ EmbeddingInputType = Literal["document", "query"]
 
 class Embedder:
     """
-    Универсальный эмбеддер для RAG.
-
+    эмбеддер для RAG.
     Поддерживает:
     - синхронное и асинхронное получение эмбеддингов
-    - модели семейства E5 (query/passsage префиксы)
+    - модели семейства E5 // затестить фриду
     - батчинг
     - L2-нормализацию (для cosine similarity)
-
     Пример использования:
         embedder = Embedder()
         vecs = embedder.embed(["текст"], input_type="document")
