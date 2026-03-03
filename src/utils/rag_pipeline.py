@@ -84,6 +84,19 @@ class VanillaRAG:
             used_top_k=len(used_chunks),
         )
 
+    @staticmethod
+    def format_sources(sources: List[SourceRef]) -> str:
+        """Render sources into user-facing bullet list."""
+        lines: List[str] = []
+        for s in sources:
+            clause = s.clause or "no_clause"
+            appendix = s.appendix
+            parts = [f"{s.source_file}", f"пункт={clause}"]
+            if appendix:
+                parts.append(f"приложение={appendix}")
+            lines.append("- " + "; ".join(parts))
+        return "\n".join(lines).strip()
+
     # -------------------------
     # Prompt building
     # -------------------------
@@ -136,10 +149,8 @@ class VanillaRAG:
             f"КОНТЕКСТ:\n{context}\n\n"
             "ТРЕБОВАНИЯ К ОТВЕТУ:\n"
             "1) Дай краткий, прямой ответ (2–6 предложений).\n"
-            "2) Перечисли источники после ответа, строками в формате:\n"
-            "   - <файл>; пункт=<пункт или no_clause>; приложение=<если есть>\n"
+            "2) Не перечисляй источники и не упоминай названия файлов/пунктов.\n"
             "3) Не выдумывай ничего вне контекста.\n"
-            "4) Если можно перефразировать или обобщить информацию из контекста — делай это.\n"
         )
 
         if not used:

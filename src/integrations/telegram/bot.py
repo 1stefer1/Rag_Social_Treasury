@@ -69,6 +69,10 @@ class TelegramRAGBot:
             result = await self.rag.aask(question)
 
             answer = result.answer
+            sources_text = VanillaRAG.format_sources(result.sources)
+            if sources_text:
+                answer = f"{answer}\n\nИсточники:\n{sources_text}"
+
             if len(answer) > 4096:
                 answer = answer[:4090] + "…"
 
@@ -76,9 +80,7 @@ class TelegramRAGBot:
 
         except Exception:
             logger.exception("Ошибка при обработке вопроса")
-            await update.message.reply_text(
-                "Произошла ошибка при обработке запроса."
-            )
+            await update.message.reply_text("Произошла ошибка при обработке запроса.")
 
 
 async def main() -> None:
@@ -93,11 +95,7 @@ async def main() -> None:
 
     bot = TelegramRAGBot()
 
-    application = (
-        ApplicationBuilder()
-        .token(token)
-        .build()
-    )
+    application = ApplicationBuilder().token(token).build()
 
     application.add_handler(CommandHandler("start", bot.start))
     application.add_handler(
