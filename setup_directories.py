@@ -14,13 +14,13 @@ def create_project_structure():
     # Создаем директории
     for directory in directories:
         Path(directory).mkdir(parents=True, exist_ok=True)
-        print(f"✅ Создана директория: {directory}")
+        print(f"Создана директория: {directory}")
 
     # Создаем лог-файлы
     for log_file in log_files:
         Path(log_file).parent.mkdir(parents=True, exist_ok=True)
         Path(log_file).touch()
-        print(f"✅ Создан лог-файл: {log_file}")
+        print(f"Создан лог-файл: {log_file}")
 
 
 if __name__ == "__main__":

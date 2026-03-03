@@ -106,3 +106,17 @@ ollama run qwen2.5:7b-instruct
 * Telegram Bot Token
 
 ## 🔧 Конфигурация
+
+## Docker (по умолчанию: bot + Ollama)
+
+1) Задать токен бота:
+   - Linux/Mac: `export TELEGRAM_BOT_TOKEN="..."`
+   - Windows PowerShell: `$env:TELEGRAM_BOT_TOKEN="..."`
+
+2) Запуск:
+```bash
+docker compose up --build
+```
+
+По умолчанию `app` ходит в `ollama` по `OLLAMA_BASE_URL=http://ollama:11434`.
+Модель можно поменять через `OLLAMA_MODEL`.

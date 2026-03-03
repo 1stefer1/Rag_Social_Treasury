@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Dict, Optional
 
 import httpx
@@ -10,14 +11,12 @@ logger = logging.getLogger(__name__)
 
 class LLM:
     """
-    LLM клиент для локального Ollama.
-
     Требования:
     - установлен и запущен Ollama
     - модель заранее скачана: ollama pull <model>
 
     По умолчанию:
-    - model = "qwen2.5:7b-instruct" (можно заменить на "qwen2.5:3b-instruct")
+    - model = "qwen2.5:7b-instruct"
     - base_url = "http://localhost:11434"
     """
 
@@ -28,8 +27,23 @@ class LLM:
         timeout: float = 120.0,
         system_prompt: str = "Ты помощник. Отвечай строго по предоставленному контексту.",
     ) -> None:
-        self.model = model
-        self.base_url = base_url.rstrip("/")
+        env_model = os.environ.get("OLLAMA_MODEL")
+        env_base_url = os.environ.get("OLLAMA_BASE_URL")
+        env_timeout = os.environ.get("OLLAMA_TIMEOUT")
+
+        self.model = (env_model or model).strip()
+        self.base_url = (env_base_url or base_url).rstrip("/")
+
+        if env_timeout:
+            try:
+                timeout = float(env_timeout)
+            except ValueError:
+                logger.warning(
+                    "Invalid OLLAMA_TIMEOUT=%r, using default timeout=%s",
+                    env_timeout,
+                    timeout,
+                )
+
         self.timeout = timeout
         self.system_prompt = system_prompt
 
@@ -42,16 +56,11 @@ class LLM:
         extra_options: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
-        Возвращает ответ LLM на prompt.
-
         Args:
             prompt: финальный промпт (уже с контекстом RAG)
             temperature: 0.0 для детерминированности в RAG
             max_tokens: ограничение на длину ответа (у Ollama это num_predict)
             extra_options: дополнительные параметры Ollama options
-
-        Returns:
-            str: текст ответа
         """
         url = f"{self.base_url}/api/chat"
 

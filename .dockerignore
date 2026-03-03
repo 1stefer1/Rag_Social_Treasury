@@ -1,0 +1,14 @@
+.git/
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+
+# Large raw docs / intermediate artifacts (not needed in the image)
+data/raw_docx/
+data/chunks_json/
+data/faiss_полный/
+
+# Logs / local outputs
+logs/
+data/gold/

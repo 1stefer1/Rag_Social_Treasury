@@ -1,0 +1,25 @@
+services:
+  app:
+    build: .
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b-instruct}
+      # Для больших моделей может потребоваться больше OLLAMA_TIMEOUT
+      OLLAMA_TIMEOUT: ${OLLAMA_TIMEOUT:-180}
+    depends_on:
+      - ollama
+    volumes:
+      - ./data/faiss_index:/app/data/faiss_index:ro
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    restart: unless-stopped
+
+volumes:
+  ollama:
