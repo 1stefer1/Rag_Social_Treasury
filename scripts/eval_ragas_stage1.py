@@ -21,7 +21,9 @@ from ragas.metrics._nv_metrics import ContextRelevance
 from ragas.run_config import RunConfig
 
 from src.utils.embedder import Embedder
+from src.utils.generator import LLM
 from src.utils.retriever import Retriever
+from src.utils.rag_pipeline import VanillaRAG
 from src.utils.ragas_support import (
     E5RagasEmbeddings,
     OllamaRagasLLM,
@@ -101,6 +103,7 @@ def _mean(values: List[Optional[float]]) -> Optional[float]:
 def _write_output(
     out_path: Path,
     input_rows: List[Row],
+    answers: List[str],
     contexts: List[List[str]],
     scores: List[Dict[str, Any]],
 ) -> None:
@@ -122,7 +125,7 @@ def _write_output(
     ] + metric_cols
     ws.append(header)
 
-    for row, ctxs, sc in zip(input_rows, contexts, scores):
+    for row, ans, ctxs, sc in zip(input_rows, answers, contexts, scores):
         used_top_k = len(ctxs)
         ctx_join = "\n\n---\n\n".join(ctxs)
         ctx_chars = len(ctx_join)
@@ -131,7 +134,7 @@ def _write_output(
                 row.id,
                 row.question,
                 row.gold_answer,
-                row.rag_answer,
+                ans,
                 row.gold_source,
                 row.matched_doc,
                 used_top_k,
@@ -162,6 +165,11 @@ async def main() -> int:
         help="Input gold xlsx with filled rag_answer (default: %(default)s)",
     )
     ap.add_argument(
+        "--generate-answers",
+        action="store_true",
+        help="Generate rag answers via current RAG pipeline (ignores rag_answer column)",
+    )
+    ap.add_argument(
         "--out-xlsx",
         default="data/gold/gold_in_scope_scored_qwen.xlsx",
         help="Output xlsx with metrics (default: %(default)s)",
@@ -187,7 +195,8 @@ async def main() -> int:
     out_path = Path(args.out_xlsx)
 
     rows = _load_rows(in_path)
-    rows = [r for r in rows if r.rag_answer]
+    if not args.generate_answers:
+        rows = [r for r in rows if r.rag_answer]
     if args.limit and args.limit > 0:
         rows = rows[: args.limit]
 
@@ -200,21 +209,48 @@ async def main() -> int:
     retriever = Retriever(embedder, top_k=args.top_k)
     retriever.load(Path(args.index_dir), name=args.index_name)
 
-    # Build contexts
-    contexts: List[List[str]] = []
-    for r in rows:
-        ctxs = await build_retrieved_contexts(
+    rag: VanillaRAG | None = None
+    if args.generate_answers:
+        llm = LLM()
+        rag = VanillaRAG(
             retriever,
-            r.question,
-            top_k=args.top_k,
+            llm,
+            default_top_k=args.top_k,
             max_context_chars=args.max_context_chars,
         )
+
+    # Build contexts + (optional) generate answers
+    contexts: List[List[str]] = []
+    answers: List[str] = []
+    for r in rows:
+        # Retrieve once to keep contexts and generation aligned
+        chunks = await retriever.aretrieve(r.question, top_k=args.top_k)
+        # Build contexts (same locator style as pipeline)
+        ctxs: List[str] = []
+        total = 0
+        for i, c in enumerate(chunks, 1):
+            from src.utils.ragas_support import format_locator
+
+            loc = format_locator(i, c.meta or {})
+            block = f"{loc}\n{c.text}".strip()
+            if total + len(block) > args.max_context_chars:
+                break
+            ctxs.append(block)
+            total += len(block)
         contexts.append(ctxs)
+
+        if args.generate_answers:
+            assert rag is not None
+            prompt, used_chunks = rag._build_prompt(r.question, chunks)
+            ans = await rag.llm.arun(prompt, temperature=0.0, max_tokens=700)
+            answers.append((ans or "").strip())
+        else:
+            answers.append(r.rag_answer)
 
     dataset = Dataset.from_dict(
         {
             "user_input": [r.question for r in rows],
-            "response": [r.rag_answer for r in rows],
+            "response": answers,
             "retrieved_contexts": contexts,
         }
     )
@@ -239,7 +275,7 @@ async def main() -> int:
     )
 
     scores = result.scores
-    _write_output(out_path, rows, contexts, scores)
+    _write_output(out_path, rows, answers, contexts, scores)
 
     # Print quick summary
     print(f"Rows evaluated: {len(rows)}")
