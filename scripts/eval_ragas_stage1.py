@@ -186,6 +186,11 @@ async def main() -> int:
     )
     ap.add_argument("--top-k", type=int, default=5)
     ap.add_argument("--max-context-chars", type=int, default=14000)
+    ap.add_argument(
+        "--use-bm25", action="store_true", help="Enable hybrid retrieval (FAISS + BM25)"
+    )
+    ap.add_argument("--bm25-weight", type=float, default=0.25)
+    ap.add_argument("--bm25-candidates-k", type=int, default=50)
     ap.add_argument("--limit", type=int, default=0, help="Evaluate only first N rows")
     ap.add_argument("--ollama-url", default="http://localhost:11434")
     ap.add_argument("--ollama-model", default="qwen2.5:7b-instruct")
@@ -206,7 +211,13 @@ async def main() -> int:
     embedder = Embedder()
     await warmup_embedder(embedder)
 
-    retriever = Retriever(embedder, top_k=args.top_k)
+    retriever = Retriever(
+        embedder,
+        top_k=args.top_k,
+        use_bm25=bool(args.use_bm25),
+        bm25_weight=float(args.bm25_weight),
+        bm25_candidates_k=int(args.bm25_candidates_k),
+    )
     retriever.load(Path(args.index_dir), name=args.index_name)
 
     rag: VanillaRAG | None = None

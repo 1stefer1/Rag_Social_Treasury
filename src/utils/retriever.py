@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -13,11 +14,28 @@ from src.utils.vector_store import SearchResult, StoredChunk, VectorStore
 logger = logging.getLogger(__name__)
 
 
+try:
+    from rank_bm25 import BM25Okapi  # type: ignore
+
+    _HAS_BM25 = True
+except Exception:
+    BM25Okapi = None  # type: ignore
+    _HAS_BM25 = False
+
+
+_TOKEN_RE = re.compile(r"[0-9A-Za-zА-Яа-яЁё]+")
+
+
+def _tokenize(text: str) -> List[str]:
+    return _TOKEN_RE.findall((text or "").lower())
+
+
 @dataclass
 class RetrievedChunk:
     """
     Результат ретривала, который удобно отдавать в генератор.
     """
+
     id: str
     score: float
     text: str
@@ -42,10 +60,20 @@ class Retriever:
         vector_store: Optional[VectorStore] = None,
         *,
         top_k: int = 5,
+        use_bm25: bool = False,
+        bm25_weight: float = 0.25,
+        bm25_candidates_k: int = 50,
     ) -> None:
         self.embedder = embedder
         self.vector_store = vector_store
         self.top_k = top_k
+
+        self.use_bm25 = use_bm25
+        self.bm25_weight = bm25_weight
+        self.bm25_candidates_k = bm25_candidates_k
+
+        self._id_to_pos: Dict[str, int] = {}
+        self._bm25 = None
 
     def save(self, dir_path: Path, name: str = "kb") -> None:
         """
@@ -71,7 +99,29 @@ class Retriever:
         """
         dir_path = dir_path.resolve()
         self.vector_store = VectorStore.load(dir_path, name=name)
+        self._post_load_build_aux_indexes()
         logger.info("Retriever: индекс загружен (%s, name=%s)", dir_path, name)
+
+    def _post_load_build_aux_indexes(self) -> None:
+        """Build lightweight helper indexes (id->pos, optional BM25)."""
+        self._id_to_pos = {}
+        self._bm25 = None
+        if self.vector_store is None:
+            return
+
+        for i, ch in enumerate(self.vector_store.store):
+            self._id_to_pos[ch.id] = i
+
+        if not self.use_bm25:
+            return
+        if not _HAS_BM25:
+            logger.warning(
+                "BM25 requested but rank-bm25 is not installed; falling back to vector search"
+            )
+            return
+
+        corpus_tokens = [_tokenize(ch.text) for ch in self.vector_store.store]
+        self._bm25 = BM25Okapi(corpus_tokens)
 
     async def aload(self, dir_path: Path, name: str = "kb") -> None:
         await asyncio.to_thread(self.load, dir_path, name=name)
@@ -95,6 +145,7 @@ class Retriever:
         vs.add(vectors, stored)
 
         self.vector_store = vs
+        self._post_load_build_aux_indexes()
         logger.info(
             "Retriever: индекс построен (чанков=%d, dim=%d)",
             len(stored),
@@ -152,15 +203,71 @@ class Retriever:
                 "VectorStore не инициализирован. Сначала вызови build_from_*()."
             )
 
-        q_vec = await self.embedder.aembed(query, input_type="query")
-        results = await asyncio.to_thread(
-            self.vector_store.search, q_vec, top_k or self.top_k
-        )
+        req_k = top_k or self.top_k
+        req_k = int(req_k)
 
-        return [
-            RetrievedChunk(id=r.id, score=r.score, text=r.text, meta=r.meta)
-            for r in results
-        ]
+        q_vec = await self.embedder.aembed(query, input_type="query")
+
+        # Semantic candidates
+        sem_k = max(req_k, 50) if self.use_bm25 else req_k
+        sem_results = await asyncio.to_thread(self.vector_store.search, q_vec, sem_k)
+
+        if not self.use_bm25 or self._bm25 is None:
+            return [
+                RetrievedChunk(id=r.id, score=r.score, text=r.text, meta=r.meta)
+                for r in sem_results[:req_k]
+            ]
+
+        # BM25 candidates
+        q_tokens = _tokenize(query)
+        bm_scores = self._bm25.get_scores(q_tokens)
+        if bm_scores is None:
+            bm_scores = []
+
+        # Take top bm25 candidates
+        k_bm = min(int(self.bm25_candidates_k), len(bm_scores))
+        bm_top_pos: List[int] = []
+        if k_bm > 0:
+            bm_top_pos = sorted(
+                range(len(bm_scores)), key=lambda i: bm_scores[i], reverse=True
+            )[:k_bm]
+
+        # Map semantic results to positions
+        sem_pos_score: Dict[int, float] = {}
+        for r in sem_results:
+            pos = self._id_to_pos.get(r.id)
+            if pos is None:
+                continue
+            sem_pos_score[pos] = float(r.score)
+
+        cand_pos = set(sem_pos_score.keys()) | set(bm_top_pos)
+        if not cand_pos:
+            return []
+
+        best_sem = max(sem_pos_score.values()) if sem_pos_score else 0.0
+        best_bm = max((float(bm_scores[i]) for i in bm_top_pos), default=0.0)
+        w_bm = float(self.bm25_weight)
+        w_bm = 0.0 if w_bm < 0 else 1.0 if w_bm > 1 else w_bm
+
+        scored: List[tuple[float, int]] = []
+        for pos in cand_pos:
+            sem = sem_pos_score.get(pos, 0.0)
+            sem_n = (sem / best_sem) if best_sem > 0 else 0.0
+            bm = float(bm_scores[pos]) if pos < len(bm_scores) else 0.0
+            bm_n = (bm / best_bm) if best_bm > 0 else 0.0
+            score = (1.0 - w_bm) * sem_n + w_bm * bm_n
+            scored.append((score, pos))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        out: List[RetrievedChunk] = []
+        for score, pos in scored[:req_k]:
+            item = self.vector_store.store[pos]
+            out.append(
+                RetrievedChunk(
+                    id=item.id, score=float(score), text=item.text, meta=item.meta
+                )
+            )
+        return out
 
     # -------------------------
     # Helpers
