@@ -33,7 +33,13 @@ class TelegramRAGBot:
         logger.info("Инициализация RAG компонентов")
 
         self.embedder = Embedder()
-        self.retriever = Retriever(self.embedder, top_k=5)
+        self.retriever = Retriever(
+            self.embedder,
+            top_k=5,
+            adaptive_top_k=True,
+            adaptive_max_k=12,
+            adaptive_ratio_to_best=0.92,
+        )
         self.retriever.load(INDEX_DIR, name=INDEX_NAME)
 
         self.llm = LLM()
@@ -76,9 +82,7 @@ class TelegramRAGBot:
 
         except Exception:
             logger.exception("Ошибка при обработке вопроса")
-            await update.message.reply_text(
-                "Произошла ошибка при обработке запроса."
-            )
+            await update.message.reply_text("Произошла ошибка при обработке запроса.")
 
 
 async def main() -> None:
@@ -93,11 +97,7 @@ async def main() -> None:
 
     bot = TelegramRAGBot()
 
-    application = (
-        ApplicationBuilder()
-        .token(token)
-        .build()
-    )
+    application = ApplicationBuilder().token(token).build()
 
     application.add_handler(CommandHandler("start", bot.start))
     application.add_handler(

@@ -186,6 +186,14 @@ async def main() -> int:
     )
     ap.add_argument("--top-k", type=int, default=5)
     ap.add_argument("--max-context-chars", type=int, default=14000)
+    ap.add_argument(
+        "--adaptive-top-k",
+        action="store_true",
+        help="Enable adaptive top-k (may return fewer than --top-k)",
+    )
+    ap.add_argument("--adaptive-max-k", type=int, default=12)
+    ap.add_argument("--adaptive-min-score", type=float, default=0.0)
+    ap.add_argument("--adaptive-ratio-to-best", type=float, default=0.92)
     ap.add_argument("--limit", type=int, default=0, help="Evaluate only first N rows")
     ap.add_argument("--ollama-url", default="http://localhost:11434")
     ap.add_argument("--ollama-model", default="qwen2.5:7b-instruct")
@@ -206,7 +214,14 @@ async def main() -> int:
     embedder = Embedder()
     await warmup_embedder(embedder)
 
-    retriever = Retriever(embedder, top_k=args.top_k)
+    retriever = Retriever(
+        embedder,
+        top_k=args.top_k,
+        adaptive_top_k=bool(args.adaptive_top_k),
+        adaptive_max_k=int(args.adaptive_max_k),
+        adaptive_min_score=float(args.adaptive_min_score),
+        adaptive_ratio_to_best=float(args.adaptive_ratio_to_best),
+    )
     retriever.load(Path(args.index_dir), name=args.index_name)
 
     rag: VanillaRAG | None = None

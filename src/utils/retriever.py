@@ -18,6 +18,7 @@ class RetrievedChunk:
     """
     Результат ретривала, который удобно отдавать в генератор.
     """
+
     id: str
     score: float
     text: str
@@ -42,10 +43,18 @@ class Retriever:
         vector_store: Optional[VectorStore] = None,
         *,
         top_k: int = 5,
+        adaptive_top_k: bool = False,
+        adaptive_max_k: int = 12,
+        adaptive_min_score: float = 0.0,
+        adaptive_ratio_to_best: float = 0.92,
     ) -> None:
         self.embedder = embedder
         self.vector_store = vector_store
         self.top_k = top_k
+        self.adaptive_top_k = adaptive_top_k
+        self.adaptive_max_k = adaptive_max_k
+        self.adaptive_min_score = adaptive_min_score
+        self.adaptive_ratio_to_best = adaptive_ratio_to_best
 
     def save(self, dir_path: Path, name: str = "kb") -> None:
         """
@@ -152,10 +161,29 @@ class Retriever:
                 "VectorStore не инициализирован. Сначала вызови build_from_*()."
             )
 
+        req_k = top_k or self.top_k
+
         q_vec = await self.embedder.aembed(query, input_type="query")
-        results = await asyncio.to_thread(
-            self.vector_store.search, q_vec, top_k or self.top_k
-        )
+
+        if self.adaptive_top_k:
+            search_k = max(int(req_k), int(self.adaptive_max_k))
+        else:
+            search_k = int(req_k)
+
+        results = await asyncio.to_thread(self.vector_store.search, q_vec, search_k)
+
+        if self.adaptive_top_k and results:
+            best = float(results[0].score)
+            thr = max(
+                float(self.adaptive_min_score),
+                best * float(self.adaptive_ratio_to_best),
+            )
+            filtered = [r for r in results if float(r.score) >= thr]
+            # Safety: always return at least 1
+            results = filtered or results[:1]
+
+        # Also respect the explicitly requested k as an upper bound
+        results = results[: int(req_k)] if req_k > 0 else results
 
         return [
             RetrievedChunk(id=r.id, score=r.score, text=r.text, meta=r.meta)
