@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from src.utils.embedder import Embedder
+from src.utils.reranker import CrossEncoderReranker
 from src.utils.vector_store import SearchResult, StoredChunk, VectorStore
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,9 @@ class Retriever:
         use_bm25: bool = False,
         bm25_weight: float = 0.25,
         bm25_candidates_k: int = 50,
+        use_reranker: bool = False,
+        reranker_model: str = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
+        reranker_candidates_k: int = 50,
     ) -> None:
         self.embedder = embedder
         self.vector_store = vector_store
@@ -71,6 +75,12 @@ class Retriever:
         self.use_bm25 = use_bm25
         self.bm25_weight = bm25_weight
         self.bm25_candidates_k = bm25_candidates_k
+
+        self.use_reranker = use_reranker
+        self.reranker_model = reranker_model
+        self.reranker_candidates_k = reranker_candidates_k
+
+        self._reranker: Optional[CrossEncoderReranker] = None
 
         self._id_to_pos: Dict[str, int] = {}
         self._bm25 = None
@@ -114,7 +124,7 @@ class Retriever:
 
         if not self.use_bm25:
             return
-        if not _HAS_BM25:
+        if not _HAS_BM25 or BM25Okapi is None:
             logger.warning(
                 "BM25 requested but rank-bm25 is not installed; falling back to vector search"
             )
@@ -208,15 +218,22 @@ class Retriever:
 
         q_vec = await self.embedder.aembed(query, input_type="query")
 
-        # Semantic candidates
-        sem_k = max(req_k, 50) if self.use_bm25 else req_k
-        sem_results = await asyncio.to_thread(self.vector_store.search, q_vec, sem_k)
+        # Candidate pool size
+        cand_k = req_k
+        if self.use_bm25:
+            cand_k = max(cand_k, 50)
+        if self.use_reranker:
+            cand_k = max(cand_k, int(self.reranker_candidates_k))
 
+        sem_results = await asyncio.to_thread(self.vector_store.search, q_vec, cand_k)
+
+        # FAISS-only path
         if not self.use_bm25 or self._bm25 is None:
-            return [
+            candidates = [
                 RetrievedChunk(id=r.id, score=r.score, text=r.text, meta=r.meta)
-                for r in sem_results[:req_k]
+                for r in sem_results
             ]
+            return await self._maybe_rerank(query, candidates, req_k)
 
         # BM25 candidates
         q_tokens = _tokenize(query)
@@ -259,15 +276,45 @@ class Retriever:
             scored.append((score, pos))
 
         scored.sort(key=lambda x: x[0], reverse=True)
-        out: List[RetrievedChunk] = []
-        for score, pos in scored[:req_k]:
+        candidates: List[RetrievedChunk] = []
+        for score, pos in scored:
             item = self.vector_store.store[pos]
-            out.append(
+            candidates.append(
                 RetrievedChunk(
                     id=item.id, score=float(score), text=item.text, meta=item.meta
                 )
             )
-        return out
+        return await self._maybe_rerank(query, candidates, req_k)
+
+    async def _maybe_rerank(
+        self, query: str, candidates: List[RetrievedChunk], top_k: int
+    ) -> List[RetrievedChunk]:
+        if not candidates:
+            return []
+
+        if not self.use_reranker:
+            return candidates[:top_k]
+
+        n = min(int(self.reranker_candidates_k), len(candidates))
+        pool = candidates[:n]
+
+        if self._reranker is None:
+            self._reranker = CrossEncoderReranker(model_name=self.reranker_model)
+
+        scores = await self._reranker.ascore(query, [c.text for c in pool])
+        if len(scores) != len(pool):
+            logger.warning(
+                "Reranker returned %d scores for %d passages", len(scores), len(pool)
+            )
+            return candidates[:top_k]
+
+        reranked = []
+        for c, s in zip(pool, scores):
+            reranked.append(
+                RetrievedChunk(id=c.id, score=float(s), text=c.text, meta=c.meta)
+            )
+        reranked.sort(key=lambda x: x.score, reverse=True)
+        return reranked[:top_k]
 
     # -------------------------
     # Helpers

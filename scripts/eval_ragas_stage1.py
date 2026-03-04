@@ -191,6 +191,20 @@ async def main() -> int:
     )
     ap.add_argument("--bm25-weight", type=float, default=0.25)
     ap.add_argument("--bm25-candidates-k", type=int, default=50)
+    ap.add_argument(
+        "--use-reranker", action="store_true", help="Enable cross-encoder reranking"
+    )
+    ap.add_argument(
+        "--reranker-model",
+        default="cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
+        help="Reranker model name (default: %(default)s)",
+    )
+    ap.add_argument(
+        "--reranker-candidates-k",
+        type=int,
+        default=50,
+        help="How many top candidates to rerank (default: %(default)s)",
+    )
     ap.add_argument("--limit", type=int, default=0, help="Evaluate only first N rows")
     ap.add_argument("--ollama-url", default="http://localhost:11434")
     ap.add_argument("--ollama-model", default="qwen2.5:7b-instruct")
@@ -217,6 +231,9 @@ async def main() -> int:
         use_bm25=bool(args.use_bm25),
         bm25_weight=float(args.bm25_weight),
         bm25_candidates_k=int(args.bm25_candidates_k),
+        use_reranker=bool(args.use_reranker),
+        reranker_model=str(args.reranker_model),
+        reranker_candidates_k=int(args.reranker_candidates_k),
     )
     retriever.load(Path(args.index_dir), name=args.index_name)
 

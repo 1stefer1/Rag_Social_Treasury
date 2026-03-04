@@ -33,11 +33,29 @@ class TelegramRAGBot:
         logger.info("Инициализация RAG компонентов")
 
         self.embedder = Embedder()
-        self.retriever = Retriever(self.embedder, top_k=5)
+
+        top_k = int(os.environ.get("TOP_K", "5"))
+        use_reranker = os.environ.get("USE_RERANKER", "1").strip().lower() not in (
+            "0",
+            "false",
+            "no",
+        )
+        reranker_model = os.environ.get(
+            "RERANKER_MODEL", "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
+        )
+        reranker_candidates_k = int(os.environ.get("RERANKER_CANDIDATES_K", "50"))
+
+        self.retriever = Retriever(
+            self.embedder,
+            top_k=top_k,
+            use_reranker=use_reranker,
+            reranker_model=reranker_model,
+            reranker_candidates_k=reranker_candidates_k,
+        )
         self.retriever.load(INDEX_DIR, name=INDEX_NAME)
 
         self.llm = LLM()
-        self.rag = VanillaRAG(self.retriever, self.llm)
+        self.rag = VanillaRAG(self.retriever, self.llm, default_top_k=top_k)
 
         logger.info("RAG готов к работе")
 
@@ -69,6 +87,9 @@ class TelegramRAGBot:
             result = await self.rag.aask(question)
 
             answer = result.answer
+            sources_text = VanillaRAG.format_sources(result.sources)
+            if sources_text:
+                answer = f"{answer}\n\nИсточники:\n{sources_text}"
             if len(answer) > 4096:
                 answer = answer[:4090] + "…"
 
@@ -76,9 +97,7 @@ class TelegramRAGBot:
 
         except Exception:
             logger.exception("Ошибка при обработке вопроса")
-            await update.message.reply_text(
-                "Произошла ошибка при обработке запроса."
-            )
+            await update.message.reply_text("Произошла ошибка при обработке запроса.")
 
 
 async def main() -> None:
@@ -93,11 +112,7 @@ async def main() -> None:
 
     bot = TelegramRAGBot()
 
-    application = (
-        ApplicationBuilder()
-        .token(token)
-        .build()
-    )
+    application = ApplicationBuilder().token(token).build()
 
     application.add_handler(CommandHandler("start", bot.start))
     application.add_handler(
