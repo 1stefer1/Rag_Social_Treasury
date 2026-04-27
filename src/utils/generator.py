@@ -47,26 +47,68 @@ class LLM:
         self.timeout = timeout
         self.system_prompt = system_prompt
 
+    # async def arun(
+    #     self,
+    #     prompt: str,
+    #     *,
+    #     temperature: float = 0.0,
+    #     max_tokens: int = 700,
+    #     extra_options: Optional[Dict[str, Any]] = None,
+    # ) -> str:
+    #     """
+    #     Args:
+    #         prompt: финальный промпт (уже с контекстом RAG)
+    #         temperature: 0.0 для детерминированности в RAG
+    #         max_tokens: ограничение на длину ответа (у Ollama это num_predict)
+    #         extra_options: дополнительные параметры Ollama options
+    #     """
+    #     url = f"{self.base_url}/api/chat"
+
+    #     options: Dict[str, Any] = {
+    #         "temperature": temperature,
+    #         "num_predict": max_tokens,
+    #     }
+    #     if extra_options:
+    #         options.update(extra_options)
+
+    #     payload: Dict[str, Any] = {
+    #         "model": self.model,
+    #         "stream": False,
+    #         "messages": [
+    #             {"role": "system", "content": self.system_prompt},
+    #             {"role": "user", "content": prompt},
+    #         ],
+    #         "options": options,
+    #     }
+
+    #     async with httpx.AsyncClient(timeout=self.timeout) as client:
+    #         r = await client.post(url, json=payload)
+    #         r.raise_for_status()
+    #         data = r.json()
+
+    #     # Ollama отдаёт ответ в data["message"]["content"]
+    #     msg = data.get("message", {})
+    #     content = (msg.get("content") or "").strip()
+
+    #     if not content:
+    #         logger.warning("LLM вернула пустой ответ. payload.model=%s", self.model)
+
+    #     return content
+
     async def arun(
         self,
         prompt: str,
         *,
         temperature: float = 0.0,
-        max_tokens: int = 700,
+        max_tokens: int = 300,
         extra_options: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """
-        Args:
-            prompt: финальный промпт (уже с контекстом RAG)
-            temperature: 0.0 для детерминированности в RAG
-            max_tokens: ограничение на длину ответа (у Ollama это num_predict)
-            extra_options: дополнительные параметры Ollama options
-        """
         url = f"{self.base_url}/api/chat"
 
         options: Dict[str, Any] = {
             "temperature": temperature,
             "num_predict": max_tokens,
+            "num_ctx": 2048,
         }
         if extra_options:
             options.update(extra_options)
@@ -81,16 +123,37 @@ class LLM:
             "options": options,
         }
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            r = await client.post(url, json=payload)
-            r.raise_for_status()
-            data = r.json()
+        logger.info(
+            "LLM request: model=%s url=%s prompt_len=%d",
+            self.model,
+            url,
+            len(prompt),
+        )
 
-        # Ollama отдаёт ответ в data["message"]["content"]
+        try:
+            async with httpx.AsyncClient(
+                timeout=self.timeout,
+                trust_env=False,
+            ) as client:
+                r = await client.post(url, json=payload)
+                r.raise_for_status()
+                data = r.json()
+        except httpx.HTTPStatusError as e:
+            body = e.response.text if e.response is not None else "<no body>"
+            logger.error(
+                "LLM HTTP error: status=%s body=%s",
+                e.response.status_code if e.response else "unknown",
+                body,
+            )
+            raise
+        except httpx.HTTPError:
+            logger.exception("LLM connection error")
+            raise
+
         msg = data.get("message", {})
         content = (msg.get("content") or "").strip()
 
         if not content:
-            logger.warning("LLM вернула пустой ответ. payload.model=%s", self.model)
+            logger.warning("LLM returned empty content. model=%s", self.model)
 
         return content

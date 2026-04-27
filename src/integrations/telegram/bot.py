@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 
 from telegram import Update
+from telegram.error import TimedOut, NetworkError
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -64,10 +65,11 @@ class TelegramRAGBot:
         update: Update,
         context: ContextTypes.DEFAULT_TYPE,
     ) -> None:
-        await update.message.reply_text(
-            "Я бот для интеллектуального поиска по нормативным документам.\n"
-            "Задайте юридический вопрос."
-        )
+        if update.message:
+            await update.message.reply_text(
+                "Я бот для интеллектуального поиска по нормативным документам.\n"
+                "Задайте юридический вопрос."
+            )
 
     async def handle_question(
         self,
@@ -90,14 +92,17 @@ class TelegramRAGBot:
             sources_text = VanillaRAG.format_sources(result.sources)
             if sources_text:
                 answer = f"{answer}\n\nИсточники:\n{sources_text}"
+
             if len(answer) > 4096:
                 answer = answer[:4090] + "…"
 
             await update.message.reply_text(answer)
 
-        except Exception:
-            logger.exception("Ошибка при обработке вопроса")
-            await update.message.reply_text("Произошла ошибка при обработке запроса.")
+        except Exception as e:
+            logger.exception("Ошибка при обработке вопроса: %s", e)
+            await update.message.reply_text(
+                "Произошла ошибка при обработке запроса. Проверьте логи сервера."
+            )
 
 
 async def main() -> None:
@@ -112,7 +117,15 @@ async def main() -> None:
 
     bot = TelegramRAGBot()
 
-    application = ApplicationBuilder().token(token).build()
+    application = (
+        ApplicationBuilder()
+        .token(token)
+        .connect_timeout(30.0)
+        .read_timeout(30.0)
+        .write_timeout(30.0)
+        .pool_timeout(30.0)
+        .build()
+    )
 
     application.add_handler(CommandHandler("start", bot.start))
     application.add_handler(
@@ -121,15 +134,36 @@ async def main() -> None:
 
     logger.info("Telegram bot запускается")
 
-    await application.initialize()
-    await application.start()
-    await application.bot.initialize()
+    try:
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling()
+        await asyncio.Event().wait()
 
-    # polling
-    await application.updater.start_polling()
-
-    # держим процесс живым
-    await asyncio.Event().wait()
+    except TimedOut:
+        logger.exception("Timeout при подключении к Telegram API")
+        raise RuntimeError(
+            "Не удалось подключиться к Telegram API. "
+            "Скорее всего проблема в сети, VPN, прокси или блокировке Telegram."
+        )
+    except NetworkError:
+        logger.exception("Сетевая ошибка при подключении к Telegram API")
+        raise RuntimeError(
+            "Сетевая ошибка при подключении к Telegram API."
+        )
+    finally:
+        try:
+            await application.updater.stop()
+        except Exception:
+            pass
+        try:
+            await application.stop()
+        except Exception:
+            pass
+        try:
+            await application.shutdown()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

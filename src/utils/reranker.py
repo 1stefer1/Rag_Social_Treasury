@@ -10,7 +10,6 @@ logger = logging.getLogger(__name__)
 
 class CrossEncoderReranker:
     """Cross-encoder reranker based on sentence-transformers CrossEncoder."""
-
     def __init__(
         self,
         model_name: str = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",

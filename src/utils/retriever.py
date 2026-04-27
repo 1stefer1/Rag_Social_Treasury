@@ -45,14 +45,9 @@ class RetrievedChunk:
 
 class Retriever:
     """
-    Ретривер для vanilla RAG:
     - загружает чанки из JSON
     - строит FAISS индекс
     - по запросу возвращает top_k релевантных чанков
-
-    Важно:
-    - Embedder должен выдавать нормированные эмбеддинги (normalize=True),
-      чтобы FAISS IndexFlatIP давал cosine similarity.
     """
 
     def __init__(
@@ -91,7 +86,7 @@ class Retriever:
         """
         if self.vector_store is None:
             raise RuntimeError(
-                "VectorStore не инициализирован. Сначала вызови build_from_*()."
+                "VectorStore не инициализирован"
             )
 
         dir_path = dir_path.resolve()
