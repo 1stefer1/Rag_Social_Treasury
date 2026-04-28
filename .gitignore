@@ -208,3 +208,7 @@ __marimo__/
 .vscode
 logs/
 /.env
+mlruns/
+mlartifacts/
+mlflow.db
+mlflow_test.db

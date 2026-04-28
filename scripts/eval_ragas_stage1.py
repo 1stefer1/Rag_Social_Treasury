@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import mean
+import time
 from typing import Any, Dict, List, Optional
 import math
+import json
 
 import sys
 
@@ -16,18 +19,20 @@ from datasets import Dataset
 from openpyxl import Workbook, load_workbook
 from ragas import evaluate
 from ragas.metrics._answer_relevance import AnswerRelevancy
+from ragas.metrics._context_precision import ContextPrecision
+from ragas.metrics._context_recall import ContextRecall
 from ragas.metrics._faithfulness import Faithfulness
 from ragas.metrics._nv_metrics import ContextRelevance
 from ragas.run_config import RunConfig
 
 from src.utils.embedder import Embedder
+from src.utils.eval_tracker import EvalTracker
 from src.utils.generator import LLM
 from src.utils.retriever import Retriever
 from src.utils.rag_pipeline import VanillaRAG
 from src.utils.ragas_support import (
     E5RagasEmbeddings,
     OllamaRagasLLM,
-    build_retrieved_contexts,
     warmup_embedder,
 )
 
@@ -100,56 +105,136 @@ def _mean(values: List[Optional[float]]) -> Optional[float]:
     return mean(xs)
 
 
-def _write_output(
-    out_path: Path,
+def _percentile(values: List[Optional[float]], q: float) -> Optional[float]:
+    xs = sorted(v for v in values if v is not None)
+    if not xs:
+        return None
+    if len(xs) == 1:
+        return xs[0]
+    pos = (len(xs) - 1) * q
+    lo = math.floor(pos)
+    hi = math.ceil(pos)
+    if lo == hi:
+        return xs[lo]
+    weight = pos - lo
+    return xs[lo] + (xs[hi] - xs[lo]) * weight
+
+
+def _normalize_metric_name(name: str) -> str:
+    mapping = {
+        "answer_relevancy": "answer_relevance",
+        "nv_context_relevance": "context_relevance",
+    }
+    return mapping.get(name, name)
+
+
+def _infer_retriever_name(args: argparse.Namespace) -> str:
+    if args.retriever_name:
+        return args.retriever_name
+    parts = ["faiss"]
+    if args.use_bm25:
+        parts.append("bm25")
+    if args.use_reranker:
+        parts.append("rerank")
+    return "+".join(parts)
+
+
+def _build_run_name(args: argparse.Namespace) -> str:
+    if args.hypothesis_name:
+        return args.hypothesis_name
+    return _infer_retriever_name(args)
+
+
+def _build_eval_records(
     input_rows: List[Row],
     answers: List[str],
     contexts: List[List[str]],
     scores: List[Dict[str, Any]],
+    telemetry: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+    for row, ans, ctxs, sc, tm in zip(input_rows, answers, contexts, scores, telemetry):
+        ctx_join = "\n\n---\n\n".join(ctxs)
+        record: Dict[str, Any] = {
+            "id": row.id,
+            "question": row.question,
+            "gold_answer": row.gold_answer,
+            "rag_answer": ans,
+            "gold_source": row.gold_source,
+            "matched_doc": row.matched_doc,
+            "used_top_k": len(ctxs),
+            "context_chars": len(ctx_join),
+            "retrieved_contexts": ctx_join,
+            **tm,
+        }
+        for key, value in sc.items():
+            record[_normalize_metric_name(key)] = value
+        records.append(record)
+    return records
+
+
+def _summarize_records(records: List[Dict[str, Any]]) -> Dict[str, float]:
+    summary: Dict[str, float] = {}
+    if not records:
+        return summary
+
+    numeric_fields = [
+        "faithfulness",
+        "answer_relevance",
+        "context_precision",
+        "context_recall",
+        "context_relevance",
+        "retrieval_latency_ms",
+        "generation_latency_ms",
+        "end_to_end_latency_ms",
+        "used_top_k",
+        "context_chars",
+    ]
+    for field in numeric_fields:
+        values = [_to_float(record.get(field)) for record in records]
+        avg = _mean(values)
+        if avg is not None:
+            suffix = "mean"
+            if field.endswith("_ms"):
+                summary[f"{field[:-3]}_mean_ms"] = avg
+                p95 = _percentile(values, 0.95)
+                if p95 is not None:
+                    summary[f"{field[:-3]}_p95_ms"] = p95
+            else:
+                if field in {
+                    "faithfulness",
+                    "answer_relevance",
+                    "context_precision",
+                    "context_recall",
+                    "context_relevance",
+                }:
+                    summary[field] = avg
+                summary[f"{field}_{suffix}"] = avg
+
+    summary["rows_evaluated"] = float(len(records))
+    return summary
+
+
+def _write_output(
+    out_path: Path,
+    records: List[Dict[str, Any]],
 ) -> None:
     wb = Workbook()
     ws = wb.active
     ws.title = "scored"
 
-    metric_cols = list(scores[0].keys()) if scores else []
-    header = [
-        "id",
-        "question",
-        "gold_answer",
-        "rag_answer",
-        "gold_source",
-        "matched_doc",
-        "used_top_k",
-        "context_chars",
-        "retrieved_contexts",
-    ] + metric_cols
+    header = list(records[0].keys()) if records else []
     ws.append(header)
 
-    for row, ans, ctxs, sc in zip(input_rows, answers, contexts, scores):
-        used_top_k = len(ctxs)
-        ctx_join = "\n\n---\n\n".join(ctxs)
-        ctx_chars = len(ctx_join)
-        ws.append(
-            [
-                row.id,
-                row.question,
-                row.gold_answer,
-                ans,
-                row.gold_source,
-                row.matched_doc,
-                used_top_k,
-                ctx_chars,
-                ctx_join,
-            ]
-            + [sc.get(c) for c in metric_cols]
-        )
+    for record in records:
+        ws.append([record.get(col) for col in header])
 
     # summary sheet
     ws2 = wb.create_sheet("summary")
     ws2.append(["metric", "mean"])
-    for c in metric_cols:
-        vals = [_to_float(s.get(c)) for s in scores]
-        ws2.append([c, _mean(vals)])
+    summary = _summarize_records(records)
+    for key, value in summary.items():
+        ws2.append([key, value])
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(out_path)
@@ -208,6 +293,15 @@ async def main() -> int:
     ap.add_argument("--limit", type=int, default=0, help="Evaluate only first N rows")
     ap.add_argument("--ollama-url", default="http://localhost:11434")
     ap.add_argument("--ollama-model", default="qwen2.5:7b-instruct")
+    ap.add_argument("--tracking-uri", default="sqlite:///mlflow.db")
+    ap.add_argument("--experiment-name", default="rag-evals")
+    ap.add_argument("--hypothesis-name", default="")
+    ap.add_argument("--prompt-version", default="vanilla_rag_v1")
+    ap.add_argument("--chunk-size", type=int, default=2500)
+    ap.add_argument("--embedding-model", default="intfloat/multilingual-e5-base")
+    ap.add_argument("--llm-model", default="qwen2.5:7b-instruct")
+    ap.add_argument("--retriever-name", default="")
+    ap.add_argument("--history-json", default="")
     args = ap.parse_args()
 
     in_path = Path(args.input_xlsx)
@@ -222,103 +316,177 @@ async def main() -> int:
     if not rows:
         raise RuntimeError("No rows to evaluate (check rag_answer column)")
 
-    embedder = Embedder()
-    await warmup_embedder(embedder)
-
-    retriever = Retriever(
-        embedder,
-        top_k=args.top_k,
-        use_bm25=bool(args.use_bm25),
-        bm25_weight=float(args.bm25_weight),
-        bm25_candidates_k=int(args.bm25_candidates_k),
-        use_reranker=bool(args.use_reranker),
-        reranker_model=str(args.reranker_model),
-        reranker_candidates_k=int(args.reranker_candidates_k),
+    tracker = EvalTracker(
+        tracking_uri=args.tracking_uri,
+        experiment_name=args.experiment_name,
+        run_name=_build_run_name(args),
+        tags={
+            "hypothesis_name": args.hypothesis_name or _build_run_name(args),
+            "prompt_version": args.prompt_version,
+            "run_origin": "eval_script",
+        },
     )
-    retriever.load(Path(args.index_dir), name=args.index_name)
+    tracker.start()
+    try:
+        embedder = Embedder(model_name=args.embedding_model)
+        await warmup_embedder(embedder)
 
-    rag: VanillaRAG | None = None
-    if args.generate_answers:
-        llm = LLM()
-        rag = VanillaRAG(
-            retriever,
-            llm,
-            default_top_k=args.top_k,
-            max_context_chars=args.max_context_chars,
+        retriever = Retriever(
+            embedder,
+            top_k=args.top_k,
+            use_bm25=bool(args.use_bm25),
+            bm25_weight=float(args.bm25_weight),
+            bm25_candidates_k=int(args.bm25_candidates_k),
+            use_reranker=bool(args.use_reranker),
+            reranker_model=str(args.reranker_model),
+            reranker_candidates_k=int(args.reranker_candidates_k),
+        )
+        retriever.load(Path(args.index_dir), name=args.index_name)
+
+        rag: VanillaRAG | None = None
+        if args.generate_answers:
+            llm = LLM(model=args.llm_model)
+            rag = VanillaRAG(
+                retriever,
+                llm,
+                default_top_k=args.top_k,
+                max_context_chars=args.max_context_chars,
+            )
+
+        # Build contexts + (optional) generate answers
+        contexts: List[List[str]] = []
+        answers: List[str] = []
+        telemetry: List[Dict[str, Any]] = []
+
+        params = {
+            "input_xlsx": str(in_path),
+            "index_dir": args.index_dir,
+            "index_name": args.index_name,
+            "chunk_size": args.chunk_size,
+            "top_k": args.top_k,
+            "max_context_chars": args.max_context_chars,
+            "retriever": _infer_retriever_name(args),
+            "embedding_model": embedder.model_name,
+            "prompt_version": args.prompt_version,
+            "llm_model": args.llm_model,
+            "judge_model": args.ollama_model,
+            "hypothesis_name": args.hypothesis_name or _build_run_name(args),
+            "use_bm25": args.use_bm25,
+            "bm25_weight": args.bm25_weight,
+            "bm25_candidates_k": args.bm25_candidates_k,
+            "use_reranker": args.use_reranker,
+            "reranker_model": args.reranker_model,
+            "reranker_candidates_k": args.reranker_candidates_k,
+            "generate_answers": args.generate_answers,
+            "rows_limit": args.limit,
+        }
+        tracker.log_params(params)
+
+        for r in rows:
+            row_started_at = time.perf_counter()
+            # Retrieve once to keep contexts and generation aligned
+            retrieval_started_at = time.perf_counter()
+            chunks = await retriever.aretrieve(r.question, top_k=args.top_k)
+            retrieval_latency_ms = (time.perf_counter() - retrieval_started_at) * 1000.0
+            # Build contexts (same locator style as pipeline)
+            ctxs: List[str] = []
+            total = 0
+            for i, c in enumerate(chunks, 1):
+                from src.utils.ragas_support import format_locator
+
+                loc = format_locator(i, c.meta or {})
+                block = f"{loc}\n{c.text}".strip()
+                if total + len(block) > args.max_context_chars:
+                    break
+                ctxs.append(block)
+                total += len(block)
+            contexts.append(ctxs)
+
+            generation_latency_ms: Optional[float] = None
+            if args.generate_answers:
+                assert rag is not None
+                prompt, used_chunks = rag._build_prompt(r.question, chunks)
+                generation_started_at = time.perf_counter()
+                ans = await rag.llm.arun(prompt, temperature=0.0, max_tokens=700)
+                generation_latency_ms = (time.perf_counter() - generation_started_at) * 1000.0
+                answers.append((ans or "").strip())
+            else:
+                answers.append(r.rag_answer)
+
+            telemetry.append(
+                {
+                    "retrieval_latency_ms": retrieval_latency_ms,
+                    "generation_latency_ms": generation_latency_ms,
+                    "end_to_end_latency_ms": (time.perf_counter() - row_started_at) * 1000.0,
+                }
+            )
+
+        dataset = Dataset.from_dict(
+            {
+                "user_input": [r.question for r in rows],
+                "response": answers,
+                "reference": [r.gold_answer for r in rows],
+                "retrieved_contexts": contexts,
+            }
         )
 
-    # Build contexts + (optional) generate answers
-    contexts: List[List[str]] = []
-    answers: List[str] = []
-    for r in rows:
-        # Retrieve once to keep contexts and generation aligned
-        chunks = await retriever.aretrieve(r.question, top_k=args.top_k)
-        # Build contexts (same locator style as pipeline)
-        ctxs: List[str] = []
-        total = 0
-        for i, c in enumerate(chunks, 1):
-            from src.utils.ragas_support import format_locator
+        judge_llm = OllamaRagasLLM(model=args.ollama_model, base_url=args.ollama_url)
+        judge_emb = E5RagasEmbeddings(embedder)
 
-            loc = format_locator(i, c.meta or {})
-            block = f"{loc}\n{c.text}".strip()
-            if total + len(block) > args.max_context_chars:
-                break
-            ctxs.append(block)
-            total += len(block)
-        contexts.append(ctxs)
+        run_config = RunConfig(timeout=600, max_workers=4)
 
-        if args.generate_answers:
-            assert rag is not None
-            prompt, used_chunks = rag._build_prompt(r.question, chunks)
-            ans = await rag.llm.arun(prompt, temperature=0.0, max_tokens=700)
-            answers.append((ans or "").strip())
-        else:
-            answers.append(r.rag_answer)
+        # Use fresh metric instances (avoid global singletons being mutated between runs)
+        metrics = [
+            AnswerRelevancy(),
+            Faithfulness(),
+            ContextPrecision(),
+            ContextRecall(),
+            ContextRelevance(),
+        ]
 
-    dataset = Dataset.from_dict(
-        {
-            "user_input": [r.question for r in rows],
-            "response": answers,
-            "retrieved_contexts": contexts,
-        }
-    )
+        result = evaluate(
+            dataset,
+            metrics=metrics,
+            llm=judge_llm,
+            embeddings=judge_emb,
+            run_config=run_config,
+            raise_exceptions=False,
+            show_progress=True,
+            batch_size=4,
+        )
 
-    judge_llm = OllamaRagasLLM(model=args.ollama_model, base_url=args.ollama_url)
-    judge_emb = E5RagasEmbeddings(embedder)
+        scores = result.scores
+        records = _build_eval_records(rows, answers, contexts, scores, telemetry)
+        _write_output(out_path, records)
+        summary = _summarize_records(records)
 
-    run_config = RunConfig(timeout=600, max_workers=4)
+        history_runs: List[Dict[str, Any]] = []
+        if args.history_json:
+            with Path(args.history_json).open("r", encoding="utf-8") as f:
+                history_runs = json.load(f)
 
-    # Use fresh metric instances (avoid global singletons being mutated between runs)
-    metrics = [AnswerRelevancy(), Faithfulness(), ContextRelevance()]
+        # Print quick summary
+        print(f"Rows evaluated: {len(rows)}")
+        for key in ("faithfulness", "answer_relevance", "context_precision", "context_recall", "context_relevance"):
+            value = summary.get(key)
+            if value is not None:
+                print(f"{key}: mean={value:.4f}")
+        print(f"Saved: {out_path}")
 
-    result = evaluate(
-        dataset,
-        metrics=metrics,
-        llm=judge_llm,
-        embeddings=judge_emb,
-        run_config=run_config,
-        raise_exceptions=False,
-        show_progress=True,
-        batch_size=4,
-    )
-
-    scores = result.scores
-    _write_output(out_path, rows, answers, contexts, scores)
-
-    # Print quick summary
-    print(f"Rows evaluated: {len(rows)}")
-    for k in scores[0].keys():
-        vals = [_to_float(s.get(k)) for s in scores]
-        m = _mean(vals)
-        if m is not None:
-            print(f"{k}: mean={m:.4f}")
-        else:
-            print(f"{k}: mean=N/A")
-    print(f"Saved: {out_path}")
-    return 0
+        tracker.log_metrics(summary)
+        tracker.log_eval_payload(
+            rows=records,
+            params=params,
+            summary_metrics=summary,
+            out_xlsx=out_path,
+            history_runs=history_runs,
+        )
+        tracker.end(status="FINISHED")
+        return 0
+    except Exception:
+        tracker.end(status="FAILED")
+        raise
 
 
 if __name__ == "__main__":
-    import asyncio
-
     raise SystemExit(asyncio.run(main()))
