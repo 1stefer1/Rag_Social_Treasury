@@ -6,6 +6,7 @@
 - SentenceTransformers (эмбеддинги)
 - локальной LLM **qwen2.5:7b-instruct** через **Ollama**
 - Telegram-бота как пользовательского интерфейса
+- Gradio Web UI для поиска по векторной БД и RAG-запросов
 
 ---
 
@@ -96,6 +97,17 @@ ollama run qwen2.5:7b-instruct
 (проверка (в терминал): echo $env:TELEGRAM_BOT_TOKEN)
 5. Запуска uv run python -m src.integrations.telegram.bot
 ```
+
+### 5. Gradio Web UI
+```bash
+uv run python -m src.integrations.gradio.app
+```
+
+По умолчанию интерфейс поднимется на `http://127.0.0.1:7860`.
+Во вкладках доступны:
+- `Search` — поиск фрагментов по векторной базе знаний
+- `Ask` — RAG-ответ с указанием источников
+- `Documents` — заготовка под будущую drag-and-drop загрузку документов
 
 ---
 

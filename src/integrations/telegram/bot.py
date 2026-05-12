@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from pathlib import Path
 
 from telegram import Update
 from telegram.error import TimedOut, NetworkError
@@ -17,46 +16,19 @@ from telegram.ext import (
     filters,
 )
 
-from src.utils.embedder import Embedder
-from src.utils.retriever import Retriever
-from src.utils.generator import LLM
 from src.utils.rag_pipeline import VanillaRAG
+from src.utils.rag_runtime import create_rag_runtime
 
 logger = logging.getLogger(__name__)
-
-BASE_DIR = Path(__file__).resolve().parents[3]
-INDEX_DIR = BASE_DIR / "data" / "faiss_index"
-INDEX_NAME = "moscow_kb"
 
 
 class TelegramRAGBot:
     def __init__(self) -> None:
         logger.info("Инициализация RAG компонентов")
 
-        self.embedder = Embedder()
-
-        top_k = int(os.environ.get("TOP_K", "5"))
-        use_reranker = os.environ.get("USE_RERANKER", "1").strip().lower() not in (
-            "0",
-            "false",
-            "no",
-        )
-        reranker_model = os.environ.get(
-            "RERANKER_MODEL", "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
-        )
-        reranker_candidates_k = int(os.environ.get("RERANKER_CANDIDATES_K", "50"))
-
-        self.retriever = Retriever(
-            self.embedder,
-            top_k=top_k,
-            use_reranker=use_reranker,
-            reranker_model=reranker_model,
-            reranker_candidates_k=reranker_candidates_k,
-        )
-        self.retriever.load(INDEX_DIR, name=INDEX_NAME)
-
-        self.llm = LLM()
-        self.rag = VanillaRAG(self.retriever, self.llm, default_top_k=top_k)
+        runtime = create_rag_runtime()
+        self.retriever = runtime.retriever
+        self.rag = runtime.rag
 
         logger.info("RAG готов к работе")
 
