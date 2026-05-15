@@ -8,6 +8,16 @@ logger = setup_logger()
 
 
 async def authorization(request: Request, call_next):
+    public_paths = {
+        "/api/v1/health",
+        "/api/v1/ready",
+        "/docs",
+        "/redoc",
+        "/openapi.json",
+    }
+    if request.url.path in public_paths or not settings.api_secret:
+        return await call_next(request)
+
     token = request.headers.get("authorization")
     if not token or token != f"Bearer {settings.api_secret}":
         return Response("Unauthorized", status_code=401)

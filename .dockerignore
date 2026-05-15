@@ -12,3 +12,8 @@ data/faiss_полный/
 # Logs / local outputs
 logs/
 data/gold/
+mlruns/
+mlartifacts/
+mlflow.db
+*.xlsx
+*.docx

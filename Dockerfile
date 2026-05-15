@@ -2,49 +2,44 @@ FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    # Keep the virtualenv outside /app to avoid huge recursive chown.
-    UV_PROJECT_ENVIRONMENT=/opt/venv \
-    PATH=/opt/venv/bin:$PATH \
-    # Force CPU-only torch wheels (prevents pulling CUDA/nvidia-* packages).
-    PIP_INDEX_URL=https://download.pytorch.org/whl/cpu \
-    PIP_EXTRA_INDEX_URL=https://pypi.org/simple \
-    UV_INDEX_URL=https://download.pytorch.org/whl/cpu \
-    UV_EXTRA_INDEX_URL=https://pypi.org/simple
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 WORKDIR /app
-# Runtime libs
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir uv
+# Install CPU-only torch first. This prevents pulling CUDA/nvidia wheels when
+# sentence-transformers is installed later from PyPI.
+RUN pip install --no-cache-dir \
+    --index-url https://download.pytorch.org/whl/cpu \
+    torch
 
-COPY pyproject.toml uv.lock ./
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev \
-      --no-install-package ragas \
-      --no-install-package openpyxl \
-      --no-install-package tqdm \
-      --no-install-package pandas \
-      --no-install-package pyarrow \
-      --no-install-package openai \
-      --no-install-package tiktoken \
-      --no-install-package langchain \
-      --no-install-package langchain-core \
-      --no-install-package langchain-community \
-      --no-install-package langchain-openai \
-      --no-install-package langchain-text-splitters \
-      --no-install-package langgraph \
-      --no-install-package langgraph-checkpoint \
-      --no-install-package langgraph-prebuilt \
-      --no-install-package langgraph-sdk \
-      --no-install-package langsmith \
-      --no-install-package instructor
+RUN pip install --no-cache-dir \
+    --index-url https://pypi.org/simple \
+    fastapi>=0.121.3 \
+    uvicorn>=0.38.0 \
+    pydantic>=2.12.4 \
+    pydantic-settings>=2.12.0 \
+    python-docx>=1.2.0 \
+    sentence-transformers>=3.0.0 \
+    faiss-cpu>=1.8.0 \
+    numpy>=2.0.0 \
+    httpx>=0.28.1 \
+    python-telegram-bot>=21.0 \
+    rank-bm25>=0.2.2 \
+    gradio>=5.49.1
 
+COPY main.py ./main.py
 COPY src ./src
-COPY data/faiss_index ./data/faiss_index
 
-RUN useradd -m -u 10001 appuser
+RUN useradd -m -u 10001 appuser \
+    && mkdir -p /app/data/faiss_index /app/logs \
+    && chown -R appuser:appuser /app
+
 USER appuser
 
-CMD ["python", "-m", "src.integrations.telegram.bot"]
+EXPOSE 8000
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

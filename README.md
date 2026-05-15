@@ -119,16 +119,61 @@ uv run python -m src.integrations.gradio.app
 
 ## 🔧 Конфигурация
 
-## Docker (по умолчанию: bot + Ollama)
+## RAG API для поставки заказчику
 
-1) Задать токен бота:
-   - Linux/Mac: `export TELEGRAM_BOT_TOKEN="..."`
-   - Windows PowerShell: `$env:TELEGRAM_BOT_TOKEN="..."`
+Сервис можно использовать как самостоятельный RAG backend. Основной API:
+- `GET /api/v1/health` — процесс жив
+- `GET /api/v1/ready` — индекс загружен
+- `GET /api/v1/config` — текущий runtime config
+- `POST /api/v1/search` — поиск по векторной базе
+- `POST /api/v1/ask` — RAG-ответ с источниками
 
-2) Запуск:
+Для подключения LLM заказчика используйте OpenAI-compatible endpoint, например vLLM:
+```env
+LLM_PROVIDER=openai_compatible
+OPENAI_BASE_URL=http://customer-llm:8000/v1
+OPENAI_API_KEY=dummy
+OPENAI_MODEL=customer-model
+```
+
+Пример запроса к API:
+```bash
+curl -X POST http://localhost:8000/api/v1/search \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer change-me" \
+  -d '{"query":"единовременная денежная выплата","top_k":5}'
+```
+
+## Docker Compose
+
+1) Создайте `.env` из примера:
+```bash
+cp .env.example .env
+```
+
+2) Настройте `.env`:
+- `API_SECRET` — Bearer token для API
+- `OPENAI_BASE_URL`, `OPENAI_MODEL` — LLM заказчика
+- `INDEX_NAME`, `TOP_K`, `USE_RERANKER` — параметры RAG
+
+3) Запуск RAG API + Gradio UI:
 ```bash
 docker compose up --build
 ```
 
-По умолчанию `app` ходит в `ollama` по `OLLAMA_BASE_URL=http://ollama:11434`.
-Модель можно поменять через `OLLAMA_MODEL`.
+4) Локальное демо с Ollama:
+```bash
+docker compose --profile ollama up --build
+```
+
+При Ollama-демо в `.env` укажите:
+```env
+LLM_PROVIDER=ollama
+OLLAMA_BASE_URL=http://ollama:11434
+OLLAMA_MODEL=qwen2.5:7b-instruct
+```
+
+5) Опциональный Telegram bot:
+```bash
+docker compose --profile telegram up --build telegram-bot
+```
