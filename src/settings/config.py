@@ -7,7 +7,7 @@ BASE_DIR = Path(__file__).parent.parent.parent
 
 
 class Settings(BaseSettings):
-    api_secret: str
+    api_secret: str = ""
 
     class Config:
         env_file = BASE_DIR / ".env"

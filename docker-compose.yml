@@ -1,20 +1,94 @@
 services:
-  app:
+  rag-api:
     build: .
+    image: rag-kb-service:local
     environment:
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
-      OLLAMA_BASE_URL: http://ollama:11434
+      INDEX_DIR: /app/data/faiss_index
+      INDEX_NAME: ${INDEX_NAME:-moscow_kb}
+      TOP_K: ${TOP_K:-5}
+      USE_BM25: ${USE_BM25:-0}
+      USE_RERANKER: ${USE_RERANKER:-1}
+      RERANKER_MODEL: ${RERANKER_MODEL:-cross-encoder/mmarco-mMiniLMv2-L12-H384-v1}
+      RERANKER_CANDIDATES_K: ${RERANKER_CANDIDATES_K:-50}
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai_compatible}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-http://customer-llm:8000/v1}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-dummy}
+      OPENAI_MODEL: ${OPENAI_MODEL:-customer-model}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b-instruct}
-      # Для больших моделей может потребоваться больше OLLAMA_TIMEOUT
-      OLLAMA_TIMEOUT: ${OLLAMA_TIMEOUT:-180}
-    depends_on:
-      - ollama
+      LLM_TIMEOUT: ${LLM_TIMEOUT:-180}
+      API_SECRET: ${API_SECRET:-}
+    ports:
+      - "${RAG_API_PORT:-8000}:8000"
     volumes:
       - ./data/faiss_index:/app/data/faiss_index:ro
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  gradio-ui:
+    image: rag-kb-service:local
+    pull_policy: never
+    environment:
+      INDEX_DIR: /app/data/faiss_index
+      INDEX_NAME: ${INDEX_NAME:-moscow_kb}
+      GRADIO_HOST: 0.0.0.0
+      GRADIO_PORT: 7860
+      TOP_K: ${TOP_K:-5}
+      USE_BM25: ${USE_BM25:-0}
+      USE_RERANKER: ${USE_RERANKER:-1}
+      RERANKER_MODEL: ${RERANKER_MODEL:-cross-encoder/mmarco-mMiniLMv2-L12-H384-v1}
+      RERANKER_CANDIDATES_K: ${RERANKER_CANDIDATES_K:-50}
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai_compatible}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-http://customer-llm:8000/v1}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-dummy}
+      OPENAI_MODEL: ${OPENAI_MODEL:-customer-model}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b-instruct}
+      LLM_TIMEOUT: ${LLM_TIMEOUT:-180}
+    command: ["python", "-m", "src.integrations.gradio.app"]
+    ports:
+      - "${GRADIO_PORT:-7860}:7860"
+    volumes:
+      - ./data/faiss_index:/app/data/faiss_index:ro
+      - ./logs:/app/logs
+    depends_on:
+      - rag-api
+    restart: unless-stopped
+
+  telegram-bot:
+    image: rag-kb-service:local
+    pull_policy: never
+    profiles: ["telegram"]
+    environment:
+      INDEX_DIR: /app/data/faiss_index
+      INDEX_NAME: ${INDEX_NAME:-moscow_kb}
+      TOP_K: ${TOP_K:-5}
+      USE_RERANKER: ${USE_RERANKER:-1}
+      RERANKER_MODEL: ${RERANKER_MODEL:-cross-encoder/mmarco-mMiniLMv2-L12-H384-v1}
+      RERANKER_CANDIDATES_K: ${RERANKER_CANDIDATES_K:-50}
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai_compatible}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-http://customer-llm:8000/v1}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-dummy}
+      OPENAI_MODEL: ${OPENAI_MODEL:-customer-model}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b-instruct}
+      LLM_TIMEOUT: ${LLM_TIMEOUT:-180}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+    command: ["python", "-m", "src.integrations.telegram.bot"]
+    volumes:
+      - ./data/faiss_index:/app/data/faiss_index:ro
+      - ./logs:/app/logs
     restart: unless-stopped
 
   ollama:
     image: ollama/ollama:latest
+    profiles: ["ollama"]
     ports:
       - "11434:11434"
     volumes:

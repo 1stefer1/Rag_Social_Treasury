@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 from src.utils.embedder import Embedder
@@ -71,3 +72,8 @@ def create_rag_runtime() -> RAGRuntime:
         index_dir=index_dir,
         index_name=index_name,
     )
+
+
+@lru_cache(maxsize=1)
+def get_rag_runtime() -> RAGRuntime:
+    return create_rag_runtime()

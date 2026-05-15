@@ -9,7 +9,6 @@ logger = setup_logger()
 
 async def hello_world(request: Request):
     body = await request.json()
-    # Задание №0 - перетащить это middlewares или сделать декоратор который проверял бы валидность тела запроса
     try:
         body = HelloWorldBodySchema(**body)
     except ValidationError as e:
