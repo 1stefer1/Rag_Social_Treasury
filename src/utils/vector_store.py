@@ -50,15 +50,12 @@ class VectorStore:
         self.dim = dim
         self.index = faiss.IndexFlatIP(dim)
         self.store: List[StoredChunk] = []
-
     # -------------------------
     # Public API
     # -------------------------
-
     def add(self, vectors: np.ndarray, chunks: Sequence[StoredChunk]) -> None:
         """
         Добавляет пачку векторов и соответствующие чанки в store.
-
         Args:
             vectors: np.ndarray (N, D) float32
             chunks: список StoredChunk длины N
@@ -69,11 +66,9 @@ class VectorStore:
             raise ValueError(
                 f"Несовпадение размеров: vectors N={vectors.shape[0]}, chunks={len(chunks)}"
             )
-
         start_size = len(self.store)
         self.index.add(vectors)
         self.store.extend(chunks)
-
         logger.info("Добавлено %d векторов. Store: %d -> %d", vectors.shape[0], start_size, len(self.store))
 
     def search(self, query_vector: np.ndarray, top_k: int = 5) -> List[SearchResult]:

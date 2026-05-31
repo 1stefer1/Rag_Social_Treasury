@@ -194,16 +194,12 @@ def _split_long_text(
     text = text.strip()
     if len(text) <= max_chars:
         return [text]
-
-    # Safety: на очень больших блоках overlap резко раздувает количество частей.
     # Отключаем overlap, если блок многократно больше лимита.
     if len(text) > max_chars * 2000:
         overlap = 0
-
     parts: List[str] = []
     start = 0
     n = len(text)
-
     while start < n:
         end = min(start + max_chars, n)
 
@@ -216,17 +212,13 @@ def _split_long_text(
         )
         if cut > 0 and end != n:
             end = start + cut + 1
-
         chunk = text[start:end].strip()
         if chunk:
             parts.append(chunk)
-
         start = max(0, end - overlap)
         if end >= n:
             break
-
     return parts
-
 
 def _merge_short_neighbor_chunks(
     chunks: List[Dict[str, Any]],

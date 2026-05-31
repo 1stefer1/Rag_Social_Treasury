@@ -1,3 +1,4 @@
+# uv run mlflow ui
 from __future__ import annotations
 
 import csv

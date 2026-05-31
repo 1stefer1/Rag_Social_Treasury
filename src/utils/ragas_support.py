@@ -34,9 +34,7 @@ class OllamaRagasLLM(BaseRagasLLM):
         "If the user asks for JSON, output ONLY valid JSON with no extra text."
     )
 
-    # ragas will set run_config later
     multiple_completion_supported: bool = field(default=False, repr=False)
-
     def _chat_once(
         self,
         user_prompt: str,

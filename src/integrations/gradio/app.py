@@ -6,6 +6,7 @@ import os
 from typing import Any, Dict, List, Tuple
 
 import gradio as gr
+import httpx
 
 from src.utils.rag_pipeline import VanillaRAG
 from src.utils.rag_runtime import create_rag_runtime
@@ -14,6 +15,9 @@ logger = logging.getLogger(__name__)
 
 RUNTIME = create_rag_runtime()
 NO_ANSWER_TEXT = "В предоставленном контексте нет информации для ответа."
+ES_SEARCH_API_URL = os.environ.get("ES_SEARCH_API_URL", "http://localhost:8010").rstrip(
+    "/"
+)
 
 CUSTOM_CSS = """
 .gradio-container {
@@ -197,7 +201,9 @@ async def _ask_async(
         prompt, used_chunks = RUNTIME.rag._build_prompt(question, chunks)
         answer = await RUNTIME.llm.arun(prompt, temperature=0.0, max_tokens=700)
         answer = (answer or "").strip()
-        sources = VanillaRAG.format_sources([RUNTIME.rag._to_source_ref(c) for c in used_chunks])
+        sources = VanillaRAG.format_sources(
+            [RUNTIME.rag._to_source_ref(c) for c in used_chunks]
+        )
         used_top_k = len(used_chunks)
     else:
         result = await RUNTIME.rag.aask(question, top_k=int(top_k))
@@ -257,6 +263,57 @@ def get_documents_placeholder() -> Tuple[str, str]:
     return message, status
 
 
+def search_elastic(
+    query: str,
+    top_k: int,
+    source_file_filter: str,
+    clause_filter: str,
+    appendix_filter: str,
+    section_filter: str,
+) -> Tuple[List[List[Any]], str]:
+    query = (query or "").strip()
+    if not query:
+        return [], "Введите запрос для Elasticsearch поиска."
+
+    payload = {
+        "query": query,
+        "top_k": int(top_k),
+        "filters": {
+            "source_file": source_file_filter or None,
+            "clause": clause_filter or None,
+            "appendix": appendix_filter or None,
+            "section": section_filter or None,
+        },
+    }
+
+    try:
+        with httpx.Client(timeout=60.0) as client:
+            r = client.post(f"{ES_SEARCH_API_URL}/es/search", json=payload)
+            r.raise_for_status()
+            data = r.json()
+    except Exception as e:
+        return [], f"Ошибка Elasticsearch поиска: {e}"
+
+    rows: List[List[Any]] = []
+    for item in data.get("results", []):
+        rows.append(
+            [
+                round(float(item.get("score") or 0.0), 4),
+                item.get("source_file", ""),
+                item.get("doc_type", ""),
+                item.get("section", ""),
+                item.get("clause", ""),
+                item.get("snippet", ""),
+            ]
+        )
+
+    note = (
+        f"Elastic найдено: {len(rows)} (total={data.get('total_hits', 0)}), "
+        f"took={round(float(data.get('took_ms', 0.0)), 2)} ms."
+    )
+    return rows, note
+
+
 def build_demo() -> gr.Blocks:
     with gr.Blocks(title="RAG Knowledge Base") as demo:
         with gr.Column(elem_classes=["app-shell"]):
@@ -294,13 +351,22 @@ def build_demo() -> gr.Blocks:
                         placeholder="Например: единовременная денежная выплата",
                         lines=2,
                     )
-                    search_button = gr.Button("Искать по базе знаний", variant="primary")
+                    search_button = gr.Button(
+                        "Искать по базе знаний", variant="primary"
+                    )
                     search_table = gr.Dataframe(
-                        headers=["score", "source_file", "clause", "appendix", "section", "text"],
+                        headers=[
+                            "score",
+                            "source_file",
+                            "clause",
+                            "appendix",
+                            "section",
+                            "text",
+                        ],
                         datatype=["number", "str", "str", "str", "str", "str"],
                         wrap=True,
                         row_count=6,
-                        column_count=(6, "fixed"),
+                        column_count=6,
                         label="Найденные фрагменты",
                         interactive=False,
                     )
@@ -368,6 +434,59 @@ def build_demo() -> gr.Blocks:
                         outputs=[answer, answer_meta],
                     )
 
+                with gr.TabItem("Search elastic"):
+                    gr.Markdown(
+                        "<div class='section-hint'>Лексический и аналитический поиск по Elasticsearch с фильтрами и цитатами.</div>"
+                    )
+                    es_query = gr.Textbox(
+                        label="Поисковый запрос (Elasticsearch)",
+                        placeholder="Например: размер единовременной компенсации",
+                        lines=2,
+                    )
+                    with gr.Row():
+                        es_source_file = gr.Textbox(
+                            label="Файл", placeholder="Часть названия документа"
+                        )
+                        es_clause = gr.Textbox(label="Пункт", placeholder="Например: 9")
+                    with gr.Row():
+                        es_appendix = gr.Textbox(
+                            label="Приложение", placeholder="Например: Приложение 1"
+                        )
+                        es_section = gr.Textbox(
+                            label="Раздел", placeholder="Например: Раздел I"
+                        )
+
+                    es_button = gr.Button("Искать в Elasticsearch", variant="primary")
+                    es_table = gr.Dataframe(
+                        headers=[
+                            "score",
+                            "source_file",
+                            "doc_type",
+                            "section",
+                            "clause",
+                            "snippet",
+                        ],
+                        datatype=["number", "str", "str", "str", "str", "str"],
+                        wrap=True,
+                        row_count=8,
+                        column_count=6,
+                        label="Результаты Elasticsearch",
+                        interactive=False,
+                    )
+                    es_status = gr.Markdown()
+                    es_button.click(
+                        fn=search_elastic,
+                        inputs=[
+                            es_query,
+                            top_k,
+                            es_source_file,
+                            es_clause,
+                            es_appendix,
+                            es_section,
+                        ],
+                        outputs=[es_table, es_status],
+                    )
+
                 with gr.TabItem("Documents"):
                     gr.Markdown(
                         "<div class='section-hint'>Раздел зарезервирован под управление документами: загрузку, переиндексацию и список файлов.</div>"
@@ -397,7 +516,6 @@ def main() -> None:
     demo.launch(
         server_name=host,
         server_port=port,
-        theme=gr.themes.Soft(),
         footer_links=[],
         css=CUSTOM_CSS,
     )
