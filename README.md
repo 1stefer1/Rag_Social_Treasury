@@ -177,3 +177,34 @@ OLLAMA_MODEL=qwen2.5:7b-instruct
 ```bash
 docker compose --profile telegram up --build telegram-bot
 ```
+
+## Elasticsearch модуль (отдельный сервис)
+
+В составе compose теперь есть отдельные сервисы:
+- `elasticsearch` (хранилище и поиск)
+- `es-search-api` (индексация и поиск по базе знаний)
+
+Endpoints ES-сервиса:
+- `GET /es/health`
+- `POST /es/index/rebuild` — полная индексация из `data/chunks_json`
+- `POST /es/index/upsert` — частичное обновление чанков
+- `DELETE /es/index/doc/{doc_id}`
+- `POST /es/search`
+
+Локальные порты по умолчанию:
+- Elasticsearch: `http://localhost:9200`
+- ES API: `http://localhost:8010`
+
+Пример запуска индексации:
+```bash
+curl -X POST http://localhost:8010/es/index/rebuild
+```
+
+Пример поиска:
+```bash
+curl -X POST http://localhost:8010/es/search \
+  -H "Content-Type: application/json" \
+  -d '{"query":"единовременная выплата","top_k":5}'
+```
+
+В Gradio добавлена отдельная вкладка `Search elastic`.

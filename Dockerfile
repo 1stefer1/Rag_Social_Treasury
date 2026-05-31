@@ -29,7 +29,8 @@ RUN pip install --no-cache-dir \
     httpx>=0.28.1 \
     python-telegram-bot>=21.0 \
     rank-bm25>=0.2.2 \
-    gradio>=5.49.1
+    gradio>=5.49.1 \
+    "elasticsearch>=8.15.1,<9.0.0"
 
 COPY main.py ./main.py
 COPY src ./src

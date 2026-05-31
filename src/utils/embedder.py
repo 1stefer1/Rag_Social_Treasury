@@ -68,16 +68,13 @@ class Embedder:
         is_single = isinstance(texts, str)
         if is_single:
             texts = [texts]
-
         vectors = await asyncio.to_thread(
             self.embed,
             texts,
             input_type=input_type,
         )
-
         if is_single:
             return vectors[0]
-
         return vectors
 
     def _prepare_texts(
