@@ -212,19 +212,3 @@ tests/
 
 Каркас offline-оценки находится в `scripts/eval_ragas_stage1.py`, описание протокола — в `docs/evaluation.md`. Перед сравнением конфигураций нужно фиксировать corpus snapshot, embedding model, candidate limits, `RRF_K`, reranker, prompt version и LLM model. В проекте не заявлены численные результаты без воспроизводимого набора данных.
 
-## Ограничения
-
-- Rebuild Qdrant и Elasticsearch не является распределённой транзакцией. При сбое индексатор нужно запустить повторно.
-- Compose-конфигурация привязывает порты хранилищ к localhost и рассчитана на локальную разработку. Для внешнего deployment нужны TLS, аутентификация Qdrant/Elasticsearch и управление секретами вне `.env`.
-- API-фильтры metadata сейчас применяются после retrieval; для больших коллекций их следует перенести в Qdrant payload filters и Elasticsearch bool filters.
-- Коллекция и индекс общие. Для multi-tenant режима необходим обязательный `tenant_id` в payload и фильтрах обеих веток.
-- При недоступности одного из retrieval backends запрос завершается ошибкой; degraded dense-only/sparse-only policy пока не определена.
-- Изменение retrieval-параметров требует offline evaluation, поскольку оно меняет состав контекста для LLM.
-
-## Развитие
-
-Ближайшие инженерные задачи: tenant isolation, versioned collections с atomic alias switch, retrieval metrics, трассировка по request ID, regression dataset для CI и публикация контейнера в registry после прохождения quality gates.
-
-## Участие и безопасность
-
-Правила разработки описаны в `CONTRIBUTING.md`, сообщения об уязвимостях — в `SECURITY.md`. Код распространяется по лицензии MIT (`LICENSE`).
