@@ -31,9 +31,9 @@ def _normalize_metric_name(name: str) -> str:
 
 def _infer_params(stem: str) -> Dict[str, Any]:
     name = stem.lower()
-    retriever = "faiss"
+    retriever = "dense"
     if "hybrid" in name or "bm25" in name:
-        retriever = "faiss+bm25"
+        retriever = "dense+bm25"
     if "rerank" in name:
         retriever += "+rerank"
 

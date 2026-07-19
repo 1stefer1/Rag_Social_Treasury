@@ -24,12 +24,14 @@ class Settings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     api_secret: SecretStr | None = None
 
-    index_dir: Path = BASE_DIR / "data" / "faiss_index"
-    index_name: str = "moscow_kb"
+    qdrant_url: str = "http://localhost:6333"
+    qdrant_api_key: SecretStr | None = None
+    qdrant_collection: str = "moscow_kb"
+    qdrant_timeout: int = Field(default=30, gt=0, le=300)
     top_k: int = Field(default=5, ge=1, le=100)
-    use_bm25: bool = False
-    bm25_weight: float = Field(default=0.25, ge=0.0, le=1.0)
-    bm25_candidates_k: int = Field(default=50, ge=1, le=1000)
+    dense_candidates_k: int = Field(default=50, ge=1, le=1000)
+    sparse_candidates_k: int = Field(default=50, ge=1, le=1000)
+    rrf_k: int = Field(default=60, ge=1, le=1000)
     use_reranker: bool = True
     reranker_model: str = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
     reranker_candidates_k: int = Field(default=50, ge=1, le=1000)
@@ -72,6 +74,12 @@ class Settings(BaseSettings):
     @property
     def api_secret_value(self) -> str:
         return self.api_secret.get_secret_value() if self.api_secret else ""
+
+    @property
+    def qdrant_api_key_value(self) -> str | None:
+        if self.qdrant_api_key is None:
+            return None
+        return self.qdrant_api_key.get_secret_value() or None
 
 
 @lru_cache(maxsize=1)

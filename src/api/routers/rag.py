@@ -91,8 +91,10 @@ async def health() -> HealthResponse:
 async def ready() -> HealthResponse:
     try:
         runtime = _get_runtime()
-        if runtime.retriever.vector_store is None:
-            raise RuntimeError("Vector store is not loaded")
+        if not runtime.retriever.vector_store.is_ready():
+            raise RuntimeError("Qdrant collection is unavailable")
+        if not runtime.retriever.sparse_store.is_ready():
+            raise RuntimeError("Elasticsearch index is unavailable")
     except Exception as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
     return HealthResponse(status="ready")
@@ -102,8 +104,8 @@ async def ready() -> HealthResponse:
 async def config() -> ConfigResponse:
     runtime = _get_runtime()
     return ConfigResponse(
-        index_dir=str(runtime.index_dir),
-        index_name=runtime.index_name,
+        qdrant_collection=runtime.qdrant_collection,
+        es_index=runtime.es_index,
         top_k=runtime.top_k,
         llm_provider=runtime.llm.provider,
         llm_model=runtime.llm.model,

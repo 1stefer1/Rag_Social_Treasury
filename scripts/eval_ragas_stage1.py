@@ -15,7 +15,9 @@ from typing import Any, Dict, List, Optional
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from datasets import Dataset
+from elasticsearch import Elasticsearch
 from openpyxl import Workbook, load_workbook
+from qdrant_client import QdrantClient
 from ragas import evaluate
 from ragas.metrics._answer_relevance import AnswerRelevancy
 from ragas.metrics._context_precision import ContextPrecision
@@ -34,6 +36,8 @@ from src.utils.ragas_support import (
     warmup_embedder,
 )
 from src.utils.retriever import Retriever
+from src.utils.sparse_store import ElasticsearchSparseStore
+from src.utils.vector_store import QdrantVectorStore
 
 
 @dataclass
@@ -130,9 +134,7 @@ def _normalize_metric_name(name: str) -> str:
 def _infer_retriever_name(args: argparse.Namespace) -> str:
     if args.retriever_name:
         return args.retriever_name
-    parts = ["faiss"]
-    if args.use_bm25:
-        parts.append("bm25")
+    parts = ["qdrant", "elasticsearch", "rrf"]
     if args.use_reranker:
         parts.append("rerank")
     return "+".join(parts)
@@ -259,22 +261,22 @@ async def main() -> int:
         help="Output xlsx with metrics (default: %(default)s)",
     )
     ap.add_argument(
-        "--index-dir",
-        default="data/faiss_index",
-        help="FAISS index directory (default: %(default)s)",
+        "--qdrant-url",
+        default="http://localhost:6333",
+        help="Qdrant URL (default: %(default)s)",
     )
     ap.add_argument(
-        "--index-name",
+        "--qdrant-collection",
         default="moscow_kb",
-        help="FAISS index name (default: %(default)s)",
+        help="Qdrant collection (default: %(default)s)",
     )
     ap.add_argument("--top-k", type=int, default=5)
     ap.add_argument("--max-context-chars", type=int, default=14000)
-    ap.add_argument(
-        "--use-bm25", action="store_true", help="Enable hybrid retrieval (FAISS + BM25)"
-    )
-    ap.add_argument("--bm25-weight", type=float, default=0.25)
-    ap.add_argument("--bm25-candidates-k", type=int, default=50)
+    ap.add_argument("--es-url", default="http://localhost:9200")
+    ap.add_argument("--es-index", default="kb_chunks")
+    ap.add_argument("--dense-candidates-k", type=int, default=50)
+    ap.add_argument("--sparse-candidates-k", type=int, default=50)
+    ap.add_argument("--rrf-k", type=int, default=60)
     ap.add_argument("--use-reranker", action="store_true", help="Enable cross-encoder reranking")
     ap.add_argument(
         "--reranker-model",
@@ -330,16 +332,16 @@ async def main() -> int:
 
         retriever = Retriever(
             embedder,
+            QdrantVectorStore(QdrantClient(url=args.qdrant_url), args.qdrant_collection),
+            ElasticsearchSparseStore(Elasticsearch(args.es_url, request_timeout=30), args.es_index),
             top_k=args.top_k,
-            use_bm25=bool(args.use_bm25),
-            bm25_weight=float(args.bm25_weight),
-            bm25_candidates_k=int(args.bm25_candidates_k),
+            dense_candidates_k=int(args.dense_candidates_k),
+            sparse_candidates_k=int(args.sparse_candidates_k),
+            rrf_k=int(args.rrf_k),
             use_reranker=bool(args.use_reranker),
             reranker_model=str(args.reranker_model),
             reranker_candidates_k=int(args.reranker_candidates_k),
         )
-        retriever.load(Path(args.index_dir), name=args.index_name)
-
         rag: VanillaRAG | None = None
         if args.generate_answers:
             llm = LLM(model=args.llm_model)
@@ -357,8 +359,10 @@ async def main() -> int:
 
         params = {
             "input_xlsx": str(in_path),
-            "index_dir": args.index_dir,
-            "index_name": args.index_name,
+            "qdrant_url": args.qdrant_url,
+            "qdrant_collection": args.qdrant_collection,
+            "es_url": args.es_url,
+            "es_index": args.es_index,
             "chunk_size": args.chunk_size,
             "top_k": args.top_k,
             "max_context_chars": args.max_context_chars,
@@ -368,9 +372,9 @@ async def main() -> int:
             "llm_model": args.llm_model,
             "judge_model": args.ollama_model,
             "hypothesis_name": args.hypothesis_name or _build_run_name(args),
-            "use_bm25": args.use_bm25,
-            "bm25_weight": args.bm25_weight,
-            "bm25_candidates_k": args.bm25_candidates_k,
+            "dense_candidates_k": args.dense_candidates_k,
+            "sparse_candidates_k": args.sparse_candidates_k,
+            "rrf_k": args.rrf_k,
             "use_reranker": args.use_reranker,
             "reranker_model": args.reranker_model,
             "reranker_candidates_k": args.reranker_candidates_k,

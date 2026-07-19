@@ -1,12 +1,16 @@
 x-rag-environment: &rag-environment
   APP_ENV: ${APP_ENV:-development}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
-  INDEX_DIR: /app/data/faiss_index
-  INDEX_NAME: ${INDEX_NAME:-moscow_kb}
+  QDRANT_URL: http://qdrant:6333
+  QDRANT_API_KEY: ${QDRANT_API_KEY:-}
+  QDRANT_COLLECTION: ${QDRANT_COLLECTION:-moscow_kb}
+  QDRANT_TIMEOUT: ${QDRANT_TIMEOUT:-30}
+  ES_URL: http://elasticsearch:9200
+  ES_INDEX: ${ES_INDEX:-kb_chunks}
   TOP_K: ${TOP_K:-5}
-  USE_BM25: ${USE_BM25:-false}
-  BM25_WEIGHT: ${BM25_WEIGHT:-0.25}
-  BM25_CANDIDATES_K: ${BM25_CANDIDATES_K:-50}
+  DENSE_CANDIDATES_K: ${DENSE_CANDIDATES_K:-50}
+  SPARSE_CANDIDATES_K: ${SPARSE_CANDIDATES_K:-50}
+  RRF_K: ${RRF_K:-60}
   USE_RERANKER: ${USE_RERANKER:-true}
   RERANKER_MODEL: ${RERANKER_MODEL:-cross-encoder/mmarco-mMiniLMv2-L12-H384-v1}
   RERANKER_CANDIDATES_K: ${RERANKER_CANDIDATES_K:-50}
@@ -20,6 +24,20 @@ x-rag-environment: &rag-environment
   LLM_TIMEOUT: ${LLM_TIMEOUT:-180}
 
 services:
+  qdrant:
+    image: qdrant/qdrant:v1.18.3
+    ports:
+      - "127.0.0.1:${QDRANT_PORT:-6333}:6333"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/6333'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.15.2
     environment:
@@ -27,7 +45,7 @@ services:
       xpack.security.enabled: "false"
       ES_JAVA_OPTS: "-Xms1g -Xmx1g"
     ports:
-      - "${ES_PORT:-9200}:9200"
+      - "127.0.0.1:${ES_PORT:-9200}:9200"
     volumes:
       - es-data:/usr/share/elasticsearch/data
     healthcheck:
@@ -49,8 +67,12 @@ services:
     ports:
       - "${RAG_API_PORT:-8000}:8000"
     volumes:
-      - ./data/faiss_index:/app/data/faiss_index:ro
       - ./logs:/app/logs
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=5)"]
       interval: 30s
@@ -58,6 +80,24 @@ services:
       retries: 3
       start_period: 60s
     restart: unless-stopped
+
+  indexer:
+    build:
+      context: .
+      target: runtime
+    image: rag-kb-service:local
+    profiles: ["indexing"]
+    environment:
+      <<: *rag-environment
+    command: ["python", "scripts/build_index.py"]
+    volumes:
+      - ./data/chunks_json:/app/data/chunks_json:ro
+      - ./logs:/app/logs
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
 
   es-search-api:
     image: rag-kb-service:local
@@ -97,7 +137,6 @@ services:
     ports:
       - "${GRADIO_PORT:-7860}:7860"
     volumes:
-      - ./data/faiss_index:/app/data/faiss_index:ro
       - ./logs:/app/logs
     depends_on:
       rag-api:
@@ -115,7 +154,6 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
     command: ["python", "-m", "src.integrations.telegram.bot"]
     volumes:
-      - ./data/faiss_index:/app/data/faiss_index:ro
       - ./logs:/app/logs
     depends_on:
       rag-api:
@@ -132,5 +170,6 @@ services:
     restart: unless-stopped
 
 volumes:
+  qdrant-data:
   es-data:
   ollama-data:

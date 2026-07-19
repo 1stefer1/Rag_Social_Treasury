@@ -6,15 +6,15 @@ Runtime, dev и evaluation зависимости разделены. `uv.lock` 
 
 ## Lazy ML runtime
 
-FastAPI import и `/health` не должны загружать SentenceTransformers, reranker и FAISS. Runtime создаётся только для readiness/search/ask и кешируется в процессе. Ошибка индекса отражается через `/ready`, а не ломает liveness.
+FastAPI import и `/health` не должны загружать SentenceTransformers и reranker. Runtime создаётся только для readiness/search/ask и кешируется в процессе. Недоступность Qdrant или Elasticsearch отражается через `/ready`, а не ломает liveness.
 
 ## Stdout JSON logging
 
 Контейнер пишет структурированные логи в stdout. Ротация и хранение принадлежат платформе. Raw prompts, chunks, tokens и customer payloads по умолчанию не логируются.
 
-## Local FAISS plus optional Elasticsearch
+## Qdrant and Elasticsearch hybrid retrieval
 
-FAISS сохраняет простой и быстрый semantic baseline. Elasticsearch остаётся отдельным модулем: объединение retrieval policies без evaluation могло бы молча изменить качество. Для production multi-tenant deployment требуется namespace/filter invariant и отдельные isolation tests.
+Qdrant хранит dense-вектора и payload чанков, Elasticsearch выполняет BM25-поиск. Результаты объединяются Reciprocal Rank Fusion, потому что cosine similarity и BM25 score имеют разные шкалы. Cross-encoder получает объединённый пул после fusion. При изменении candidate limits, RRF constant или модели reranker требуется повторный offline evaluation.
 
 ## No deployment-shaped CD
 

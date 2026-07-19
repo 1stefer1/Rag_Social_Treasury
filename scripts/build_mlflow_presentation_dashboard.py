@@ -68,7 +68,7 @@ def _score_completeness(row: Dict[str, Any]) -> int:
 def _normalize_retriever(name: str) -> str:
     text = (name or "").strip().lower()
     if not text:
-        return "faiss"
+        return "dense"
     return text
 
 
@@ -250,10 +250,10 @@ def _build_artifacts(rows: List[Dict[str, Any]], output_dir: Path) -> None:
 
     fig, ax = plt.subplots(figsize=(11, 8))
     color_map = {
-        "faiss": "#355C7D",
-        "faiss+rerank": "#6C5B7B",
-        "faiss+bm25": "#F67280",
-        "faiss+bm25+rerank": "#C06C84",
+        "dense": "#355C7D",
+        "dense+rerank": "#6C5B7B",
+        "dense+bm25": "#F67280",
+        "dense+bm25+rerank": "#C06C84",
     }
     for row in rows:
         x_val = row["answer_relevance_t"]

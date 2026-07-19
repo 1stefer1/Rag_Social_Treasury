@@ -101,13 +101,16 @@ async def main() -> None:
 
     application.add_handler(CommandHandler("start", bot.start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_question))
+    updater = application.updater
+    if updater is None:
+        raise RuntimeError("Telegram polling updater is unavailable")
 
     logger.info("Telegram bot запускается")
 
     try:
         await application.initialize()
         await application.start()
-        await application.updater.start_polling()
+        await updater.start_polling()
         await asyncio.Event().wait()
 
     except TimedOut as exc:
@@ -121,7 +124,7 @@ async def main() -> None:
         raise RuntimeError("Сетевая ошибка при подключении к Telegram API.") from exc
     finally:
         try:
-            await application.updater.stop()
+            await updater.stop()
         except Exception:
             pass
         try:

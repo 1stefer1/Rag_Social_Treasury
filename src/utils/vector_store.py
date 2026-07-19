@@ -1,211 +1,111 @@
 from __future__ import annotations
 
-import json
 import logging
+import uuid
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Sequence
 
 import numpy as np
+from qdrant_client import QdrantClient, models
 
 logger = logging.getLogger(__name__)
 
-try:
-    import faiss
-except ImportError as e:
-    raise ImportError(
-        "faiss не установлен. Добавь зависимость 'faiss-cpu' в pyproject.toml и сделай uv sync."
-    ) from e
 
-
-@dataclass
+@dataclass(frozen=True)
 class StoredChunk:
-    """
-    То, что мы храним параллельно с FAISS (потому что FAISS хранит только вектора).
-    """
-
     id: str
     text: str
-    meta: Dict[str, Any]
+    meta: dict[str, Any]
 
 
-@dataclass
+@dataclass(frozen=True)
 class SearchResult:
     id: str
     score: float
     text: str
-    meta: Dict[str, Any]
+    meta: dict[str, Any]
 
 
-class VectorStore:
-    """
-    Векторное хранилище на базе FAISS (IndexFlatIP) + JSON store.
+class QdrantVectorStore:
+    """Dense-vector storage backed by a Qdrant collection."""
 
-    Требование:
-    - вектора должны быть float32 shape (N, D)
-    - для cosine similarity вектора должны быть L2-нормированы заранее
-      (Embedder должен выдавать normalize_embeddings=True).
-    """
+    def __init__(self, client: QdrantClient, collection_name: str) -> None:
+        self.client = client
+        self.collection_name = collection_name
 
-    def __init__(self, dim: int) -> None:
-        self.dim = dim
-        self.index = faiss.IndexFlatIP(dim)
-        self.store: List[StoredChunk] = []
-
-    # -------------------------
-    # Public API
-    # -------------------------
-    def add(self, vectors: np.ndarray, chunks: Sequence[StoredChunk]) -> None:
-        """
-        Добавляет пачку векторов и соответствующие чанки в store.
-        Args:
-            vectors: np.ndarray (N, D) float32
-            chunks: список StoredChunk длины N
-        """
-        vectors = self._validate_vectors(vectors)
-
-        if len(chunks) != vectors.shape[0]:
-            raise ValueError(
-                f"Несовпадение размеров: vectors N={vectors.shape[0]}, chunks={len(chunks)}"
-            )
-        start_size = len(self.store)
-        self.index.add(vectors)
-        self.store.extend(chunks)
+    def recreate_collection(self, vector_size: int) -> None:
+        if self.client.collection_exists(self.collection_name):
+            self.client.delete_collection(self.collection_name)
+        self.client.create_collection(
+            collection_name=self.collection_name,
+            vectors_config=models.VectorParams(size=vector_size, distance=models.Distance.COSINE),
+            on_disk_payload=True,
+        )
         logger.info(
-            "Добавлено %d векторов. Store: %d -> %d", vectors.shape[0], start_size, len(self.store)
+            "Created Qdrant collection %s (vector_size=%d)",
+            self.collection_name,
+            vector_size,
         )
 
-    def search(self, query_vector: np.ndarray, top_k: int = 5) -> List[SearchResult]:
-        """
-        Ищет top_k ближайших.
+    def add(self, vectors: np.ndarray, chunks: Sequence[StoredChunk]) -> None:
+        vectors = self._validate_vectors(vectors)
+        if len(chunks) != vectors.shape[0]:
+            raise ValueError(
+                f"Vector/chunk count mismatch: vectors={vectors.shape[0]}, chunks={len(chunks)}"
+            )
 
-        Args:
-            query_vector: np.ndarray (D,) или (1, D), float32, L2-нормированный
-            top_k: количество результатов
+        points = [
+            models.PointStruct(
+                id=str(uuid.uuid5(uuid.NAMESPACE_URL, chunk.id)),
+                vector=vector.tolist(),
+                payload={"chunk_id": chunk.id, "text": chunk.text, **chunk.meta},
+            )
+            for vector, chunk in zip(vectors, chunks, strict=True)
+        ]
+        self.client.upload_points(
+            collection_name=self.collection_name,
+            points=points,
+            batch_size=128,
+            max_retries=3,
+            wait=True,
+        )
+        logger.info("Indexed %d dense vectors in Qdrant", len(points))
 
-        Returns:
-            список SearchResult (id, score, text, meta)
-        """
-        q = self._validate_query(query_vector)
-
-        if self.index.ntotal == 0:
-            return []
-
-        k = min(top_k, self.index.ntotal)
-        scores, idxs = self.index.search(q, k)  # scores: (1,k), idxs: (1,k)
-
-        results: List[SearchResult] = []
-        for score, idx in zip(scores[0].tolist(), idxs[0].tolist()):
-            if idx < 0:
-                continue
-            item = self.store[idx]
+    def search(self, query_vector: np.ndarray, top_k: int = 5) -> list[SearchResult]:
+        vector = self._validate_query(query_vector)
+        response = self.client.query_points(
+            collection_name=self.collection_name,
+            query=vector.tolist(),
+            limit=top_k,
+            with_payload=True,
+        )
+        results: list[SearchResult] = []
+        for point in response.points:
+            payload = dict(point.payload or {})
+            chunk_id = str(payload.pop("chunk_id", point.id))
+            text = str(payload.pop("text", ""))
             results.append(
-                SearchResult(
-                    id=item.id,
-                    score=float(score),
-                    text=item.text,
-                    meta=item.meta,
-                )
+                SearchResult(id=chunk_id, score=float(point.score), text=text, meta=payload)
             )
         return results
 
-    def save(self, dir_path: Path, name: str = "kb") -> Tuple[Path, Path]:
-        """
-        Сохраняет индекс и store в директорию.
-        """
-        dir_path.mkdir(parents=True, exist_ok=True)
-        index_path = dir_path / f"{name}.faiss"
-        store_path = dir_path / f"{name}.store.json"
+    def is_ready(self) -> bool:
+        return self.client.collection_exists(self.collection_name)
 
-        faiss.write_index(self.index, str(index_path))
-        with store_path.open("w", encoding="utf-8") as f:
-            json.dump(
-                [{"id": c.id, "text": c.text, "meta": c.meta} for c in self.store],
-                f,
-                ensure_ascii=False,
-                indent=2,
-            )
-
-        logger.info("Сохранено: %s и %s", index_path, store_path)
-        return index_path, store_path
-
-    @classmethod
-    def load(cls, dir_path: Path, name: str = "kb") -> "VectorStore":
-        """
-        Загружает индекс и store из директории.
-        """
-        index_path = dir_path / f"{name}.faiss"
-        store_path = dir_path / f"{name}.store.json"
-
-        if not index_path.exists():
-            raise FileNotFoundError(f"Не найден FAISS индекс: {index_path}")
-        if not store_path.exists():
-            raise FileNotFoundError(f"Не найден store: {store_path}")
-
-        index = faiss.read_index(str(index_path))
-        dim = index.d
-
-        vs = cls(dim=dim)
-        vs.index = index
-
-        with store_path.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        store: List[StoredChunk] = []
-        for item in data:
-            store.append(
-                StoredChunk(
-                    id=item["id"],
-                    text=item["text"],
-                    meta=item.get("meta", {}),
-                )
-            )
-
-        # Важно: порядок store должен соответствовать порядку векторов в индексе.
-        if len(store) != vs.index.ntotal:
-            logger.warning(
-                "Несоответствие store (%d) и индекса (%d). Это может привести к неверным соответствиям.",
-                len(store),
-                vs.index.ntotal,
-            )
-
-        vs.store = store
-        logger.info("Загружено: %d векторов", vs.index.ntotal)
-        return vs
-
-    # -------------------------
-    # Validation
-    # -------------------------
-
-    def _validate_vectors(self, vectors: np.ndarray) -> np.ndarray:
+    @staticmethod
+    def _validate_vectors(vectors: np.ndarray) -> np.ndarray:
         if not isinstance(vectors, np.ndarray):
-            raise TypeError("vectors должны быть numpy.ndarray")
-        if vectors.ndim != 2:
-            raise ValueError("vectors должны иметь форму (N, D)")
-        if vectors.shape[1] != self.dim:
-            raise ValueError(f"Ожидалась размерность D={self.dim}, получено {vectors.shape[1]}")
-        if vectors.dtype != np.float32:
-            vectors = vectors.astype("float32")
-        return vectors
+            raise TypeError("vectors must be a numpy.ndarray")
+        if vectors.ndim != 2 or vectors.shape[0] == 0 or vectors.shape[1] == 0:
+            raise ValueError("vectors must have non-empty shape (N, D)")
+        return vectors.astype(np.float32, copy=False)
 
-    def _validate_query(self, query_vector: np.ndarray) -> np.ndarray:
+    @staticmethod
+    def _validate_query(query_vector: np.ndarray) -> np.ndarray:
         if not isinstance(query_vector, np.ndarray):
-            raise TypeError("query_vector должен быть numpy.ndarray")
-
-        if query_vector.ndim == 1:
-            if query_vector.shape[0] != self.dim:
-                raise ValueError(
-                    f"Ожидалась форма (D,), D={self.dim}, получено {query_vector.shape}"
-                )
-            q = query_vector.reshape(1, -1)
-        elif query_vector.ndim == 2:
-            if query_vector.shape != (1, self.dim):
-                raise ValueError(f"Ожидалась форма (1, D), получено {query_vector.shape}")
-            q = query_vector
-        else:
-            raise ValueError("query_vector должен иметь форму (D,) или (1, D)")
-
-        if q.dtype != np.float32:
-            q = q.astype("float32")
-
-        return q
+            raise TypeError("query_vector must be a numpy.ndarray")
+        if query_vector.ndim == 2 and query_vector.shape[0] == 1:
+            query_vector = query_vector[0]
+        if query_vector.ndim != 1 or query_vector.size == 0:
+            raise ValueError("query_vector must have shape (D,) or (1, D)")
+        return query_vector.astype(np.float32, copy=False)
