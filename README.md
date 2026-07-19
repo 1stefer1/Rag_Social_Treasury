@@ -1,210 +1,173 @@
-# RAG соцказначейство 
+# RAG для нормативно-правовой базы социальной поддержки
 
-Проект реализует **Vanilla Retrieval-Augmented Generation (RAG)** для интеллектуального поиска по нормативно-правовым документам  
-(постановления, законы, приказы) с использованием:
-- FAISS (векторный поиск)
-- SentenceTransformers (эмбеддинги)
-- локальной LLM **qwen2.5:7b-instruct** через **Ollama**
-- Telegram-бота как пользовательского интерфейса
-- Gradio Web UI для поиска по векторной БД и RAG-запросов
+Production-oriented RAG-сервис для поиска и генерации ответов по русскоязычным нормативно-правовым документам. Проект демонстрирует полный NLP-контур: разбор DOCX, построение индекса, hybrid retrieval, reranking, grounded generation, API/UI-интеграции и offline evaluation.
 
----
+> Репозиторий не содержит исходных пользовательских документов, весов моделей, FAISS-индексов и экспериментальных XLSX. Их нужно подготовить локально. Это намеренное ограничение для безопасной публичной публикации.
 
-## 📁 Структура проекта
-```text
-rag_project/
-├── data/
-│   ├── raw_docx/          # Исходные .docx документы
-│   ├── chunks_json/       # Распарсенные чанки (JSON)
-│   └── faiss_index/       # Сохранённый FAISS индекс
-│
-├── src/
-│   ├── utils/
-│   │   ├── process.py         # Парсинг DOCX → чанки
-│   │   ├── embedder.py        # Эмбеддер (multilingual-e5)
-│   │   ├── vector_store.py    # FAISS-хранилище
-│   │   ├── retriever.py       # Retriever
-│   │   ├── generator.py       # LLM (Qwen через Ollama)
-│   │   └── rag_pipeline.py    # Vanilla RAG пайплайн
-│   │
-│   └── integrations/
-│       └── telegram/
-│           └── bot.py         # Telegram-бот
-│
-├── scripts/               # Тестовые и отладочные скрипты
-├── setup_directories.py   # Создание директорий (логи и т.п.)
-├── pyproject.toml
-└── README.md
+## Возможности
+
+- DOCX → структурированные JSON-чанки с метаданными;
+- multilingual E5 embeddings и FAISS cosine search;
+- опциональный BM25 hybrid retrieval и cross-encoder reranking;
+- Ollama либо OpenAI-compatible LLM (включая vLLM/gateway);
+- FastAPI endpoints для health, readiness, search и ask;
+- Gradio UI, Telegram profile и отдельный Elasticsearch search API;
+- RAGAS/MLflow evaluation profile без вымышленных benchmark-результатов;
+- typed settings, structured JSON logs, pytest, Ruff, mypy, secret scanning и Docker CI.
+
+## Архитектура
+
+```mermaid
+flowchart LR
+    DOCX["Локальные DOCX"] --> PARSE["Parser + chunking"]
+    PARSE --> JSON["JSON chunks + metadata"]
+    JSON --> EMB["E5 embeddings"]
+    EMB --> FAISS["FAISS index"]
+    JSON --> ES["Elasticsearch (optional)"]
+
+    USER["API / Gradio / Telegram"] --> RET["Retriever"]
+    FAISS --> RET
+    RET --> BM25["BM25 fusion (optional)"]
+    BM25 --> RERANK["Cross-encoder (optional)"]
+    RERANK --> PROMPT["Grounded prompt"]
+    PROMPT --> LLM["Ollama or OpenAI-compatible LLM"]
+    LLM --> GUARD["Language / no-answer guard"]
+    GUARD --> USER
 ```
----
 
-## 🔁 Общая схема работы
+Основной runtime собирается в `src/utils/rag_runtime.py`. Модели и индекс инициализируются лениво при первом endpoint, которому нужен retrieval; `/health` и импорт приложения остаются лёгкими. Prompt является production-логикой в `src/utils/rag_pipeline.py`. Внешние документы считаются недоверенным содержимым: модель должна использовать их как факты, а не как инструкции.
 
-1. `.docx` документы помещаются в `data/raw_docx/`
-2. Парсер извлекает главы / статьи / пункты → JSON-чанки
-3. Чанки преобразуются в эмбеддинги и сохраняются в FAISS
-4. Пользователь задаёт вопрос через Telegram
-5. RAG:
-   - ищет релевантные чанки
-   - собирает контекст
-   - отправляет запрос в Qwen
-6. Ответ + источники возвращаются пользователю
+## Стек
 
----
+Python 3.12, FastAPI, Pydantic Settings, SentenceTransformers, PyTorch CPU, FAISS, rank-bm25, Elasticsearch 8, httpx, Gradio, python-telegram-bot, pytest, Ruff, mypy, uv, Docker/Compose, RAGAS и MLflow.
 
-## 📦 Быстрый старт
+## Быстрый старт
 
-### 1. Установка и настройка окружения
+Требования: Python 3.12, [uv](https://docs.astral.sh/uv/), Git. Для контейнерного запуска — Docker Engine с Compose v2. Для локальной генерации — Ollama либо доступный OpenAI-compatible endpoint.
+
 ```bash
-# Клонировать проект
-git clone <repo_url>
+git clone <repository-url>
 cd rag_project
-
-# Создать виртуальное окружение
-uv venv .venv
-
-# Активировать окружение
-# Windows:
-.venv\Scripts\activate
-# Linux / Mac:
-source .venv/bin/activate
-
-# Установить зависимости
-uv sync
-```
-### 2. Запуск проекта
-Если это первый запуск создайте директорию под логи 
-```bash
-python .\setup_directories.py
-```
-### 3. Установка qwen локально
-```bash
-# 1. Установить Ollama с официального сайта:
-# https://ollama.com
-
-# 2. Скачать модель Qwen:
-ollama pull qwen2.5:7b-instruct
-
-# 3. Проверить работу модели:
-ollama run qwen2.5:7b-instruct
-```
-### 4. Telegram-бот
-```bash
-1. В Telegram открой @BotFather
-2. /newbot
-3. Скопируй токен
-4. в терминал: setx TELEGRAM_BOT_TOKEN "ВАШ_ТОКЕН"
-(проверка (в терминал): echo $env:TELEGRAM_BOT_TOKEN)
-5. Запуска uv run python -m src.integrations.telegram.bot
-```
-
-### 5. Gradio Web UI
-```bash
-uv run python -m src.integrations.gradio.app
-```
-
-По умолчанию интерфейс поднимется на `http://127.0.0.1:7860`.
-Во вкладках доступны:
-- `Search` — поиск фрагментов по векторной базе знаний
-- `Ask` — RAG-ответ с указанием источников
-- `Documents` — заготовка под будущую drag-and-drop загрузку документов
-
----
-
-## ⚙️ Требования
-* Python 3.12+
-* uv
-* Ollama (~15 gb)
-* Telegram Bot Token
-
-## 🔧 Конфигурация
-
-## RAG API для поставки заказчику
-
-Сервис можно использовать как самостоятельный RAG backend. Основной API:
-- `GET /api/v1/health` — процесс жив
-- `GET /api/v1/ready` — индекс загружен
-- `GET /api/v1/config` — текущий runtime config
-- `POST /api/v1/search` — поиск по векторной базе
-- `POST /api/v1/ask` — RAG-ответ с источниками
-
-Для подключения LLM заказчика используйте OpenAI-compatible endpoint, например vLLM:
-```env
-LLM_PROVIDER=openai_compatible
-OPENAI_BASE_URL=http://customer-llm:8000/v1
-OPENAI_API_KEY=dummy
-OPENAI_MODEL=customer-model
-```
-
-Пример запроса к API:
-```bash
-curl -X POST http://localhost:8000/api/v1/search \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer change-me" \
-  -d '{"query":"единовременная денежная выплата","top_k":5}'
-```
-
-## Docker Compose
-
-1) Создайте `.env` из примера:
-```bash
+uv sync --group dev
 cp .env.example .env
 ```
 
-2) Настройте `.env`:
-- `API_SECRET` — Bearer token для API
-- `OPENAI_BASE_URL`, `OPENAI_MODEL` — LLM заказчика
-- `INDEX_NAME`, `TOP_K`, `USE_RERANKER` — параметры RAG
+На Windows используйте `Copy-Item .env.example .env`.
 
-3) Запуск RAG API + Gradio UI:
+Поместите разрешённые к использованию документы в `data/raw_docx/`, затем подготовьте чанки существующим ingestion-кодом и индекс:
+
 ```bash
+uv run python scripts/build_index.py
+```
+
+`scripts/build_index.py` ожидает подготовленные JSON-чанки в `data/chunks_json/`. Парсер находится в `src/utils/process.py`; формат и источник данных зависят от конкретной поставки и не публикуются вместе с кодом.
+
+Запуск API:
+
+```bash
+uv run uvicorn main:app --host 0.0.0.0 --port 8000
+```
+
+Проверка:
+
+```bash
+curl http://localhost:8000/api/v1/health
+curl -X POST http://localhost:8000/api/v1/search \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $API_SECRET" \
+  -d '{"query":"единовременная денежная выплата","top_k":5}'
+```
+
+Swagger UI: `http://localhost:8000/docs`. Если `API_SECRET` пуст в development/test, auth отключён. В production секрет обязателен.
+
+## Конфигурация
+
+Все runtime-параметры описаны в `.env.example` и валидируются `src/settings/config.py`. Основные группы:
+
+- `APP_ENV`, `LOG_LEVEL`, `API_SECRET` — профиль, logging и API auth;
+- `INDEX_*`, `TOP_K`, `USE_BM25`, `USE_RERANKER` — retrieval;
+- `LLM_PROVIDER`, `OPENAI_*`, `OLLAMA_*`, `LLM_TIMEOUT` — generation;
+- `ES_*`, `GRADIO_*`, `TELEGRAM_BOT_TOKEN` — интеграции.
+
+Никогда не коммитьте `.env`. `OPENAI_API_KEY` может быть пустым только для gateway, который не требует auth. В production используйте secret manager платформы.
+
+## Docker Compose
+
+После локального построения `data/faiss_index`:
+
+```bash
+docker compose config --quiet
+docker compose up --build rag-api
 docker compose up --build
 ```
 
-4) Локальное демо с Ollama:
+Второй вариант запускает API, Elasticsearch search API и Gradio. Профили:
+
 ```bash
 docker compose --profile ollama up --build
-```
-
-При Ollama-демо в `.env` укажите:
-```env
-LLM_PROVIDER=ollama
-OLLAMA_BASE_URL=http://ollama:11434
-OLLAMA_MODEL=qwen2.5:7b-instruct
-```
-
-5) Опциональный Telegram bot:
-```bash
 docker compose --profile telegram up --build telegram-bot
 ```
 
-## Elasticsearch модуль (отдельный сервис)
+Образ собирается из `uv.lock`, использует CPU-only PyTorch, multi-stage build и непривилегированного пользователя. Данные монтируются read-only и не попадают в build context.
 
-В составе compose теперь есть отдельные сервисы:
-- `elasticsearch` (хранилище и поиск)
-- `es-search-api` (индексация и поиск по базе знаний)
+## Проверки разработчика
 
-Endpoints ES-сервиса:
-- `GET /es/health`
-- `POST /es/index/rebuild` — полная индексация из `data/chunks_json`
-- `POST /es/index/upsert` — частичное обновление чанков
-- `DELETE /es/index/doc/{doc_id}`
-- `POST /es/search`
-
-Локальные порты по умолчанию:
-- Elasticsearch: `http://localhost:9200`
-- ES API: `http://localhost:8010`
-
-Пример запуска индексации:
 ```bash
-curl -X POST http://localhost:8010/es/index/rebuild
+uv run ruff format --check src tests main.py
+uv run ruff check src tests main.py
+uv run mypy src/settings src/schemas src/api src/utils/generator.py src/utils/output_guard.py
+uv run pytest -m unit
+uv run pytest -m integration
+uv run pre-commit run --all-files
+docker compose config --quiet
+docker build --target runtime -t rag-kb-service:local .
 ```
 
-Пример поиска:
+Evaluation-зависимости отделены от runtime:
+
 ```bash
-curl -X POST http://localhost:8010/es/search \
-  -H "Content-Type: application/json" \
-  -d '{"query":"единовременная выплата","top_k":5}'
+uv sync --group dev --extra evaluation
+uv run python scripts/eval_ragas_stage1.py --help
 ```
 
-В Gradio добавлена отдельная вкладка `Search elastic`.
+Методика и ограничения описаны в [docs/evaluation.md](docs/evaluation.md). Репозиторий намеренно не заявляет метрики без воспроизводимого публичного набора данных.
+
+## CI
+
+GitHub Actions на `push` и `pull_request` выполняет format/lint/type checks, раздельные unit/integration tests, smoke import, detect-secrets + Gitleaks, контроль крупных файлов, Compose validation и BuildKit build с GHA cache. CD не добавлен: публикацию образа следует подключать только после выбора registry, политики тегов, SBOM/signing и целевого окружения.
+
+## Структура
+
+```text
+.
+├── .github/workflows/ci.yml
+├── docs/                       # evaluation и engineering decisions
+├── scripts/                    # ingestion/evaluation/diagnostic CLI
+├── src/
+│   ├── api/                    # FastAPI routers, middleware, schemas boundary
+│   ├── integrations/           # Elasticsearch, Gradio, Telegram
+│   ├── schemas/                # API contracts
+│   ├── settings/               # validated runtime configuration
+│   └── utils/                  # embedding, retrieval, generation, RAG, evaluation
+├── tests/unit
+├── tests/integration
+├── Dockerfile
+├── docker-compose.yml
+├── pyproject.toml
+└── uv.lock
+```
+
+## Инженерные компромиссы и ограничения
+
+- FAISS — локальный single-process индекс; нет multi-tenant namespace и online update transaction.
+- Elasticsearch реализован отдельным lexical-search сервисом и пока не включён в единый production retrieval policy.
+- Prompt имеет явный `legal-rag-v1`, но пока хранится в коде без внешнего registry; изменение требует regression eval.
+- Language guard иногда делает второй LLM-вызов, увеличивая latency и cost.
+- Нет публичного обезличенного gold dataset, поэтому CI проверяет контракты, но не semantic quality threshold.
+- Юридические ответы не заменяют консультацию специалиста; source freshness и право публикации документов должны проверяться владельцем поставки.
+
+Следующие шаги: prompt registry, tenant-scoped indices, request/trace IDs, retrieval and generation latency metrics, reproducible anonymized eval fixture, quality gates, SBOM + image signing и controlled registry publication.
+
+## Участие, безопасность и лицензия
+
+См. [CONTRIBUTING.md](CONTRIBUTING.md) и [SECURITY.md](SECURITY.md). Код распространяется по MIT License; права на документы, модели и внешние данные этой лицензией не предоставляются.

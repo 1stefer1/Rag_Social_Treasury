@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any, Dict
 
+import httpx
 from fastapi import APIRouter, HTTPException
 
 from src.schemas.rag_schema import (
@@ -15,12 +17,20 @@ from src.schemas.rag_schema import (
     SearchRequest,
     SearchResponse,
 )
-from src.utils.rag_runtime import get_rag_runtime
+from src.utils.output_guard import build_russian_rewrite_prompt, looks_non_russian
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 NO_ANSWER_TEXT = "В предоставленном контексте нет информации для ответа."
 IGNORED_FILTER_VALUES = {"", "string", "null", "none", "undefined"}
+
+
+def _get_runtime() -> Any:
+    """Import the ML runtime lazily so health checks do not load models."""
+    from src.utils.rag_runtime import get_rag_runtime
+
+    return get_rag_runtime()
 
 
 def _is_effective_filter_value(value: Any) -> bool:
@@ -63,7 +73,7 @@ def _to_source(chunk) -> RAGSource:
 
 
 async def _retrieve_filtered(query: str, top_k: int, filters: MetadataFilters | None):
-    runtime = get_rag_runtime()
+    runtime = _get_runtime()
     candidate_k = top_k
     if _has_effective_filters(filters):
         candidate_k = max(top_k * 6, 20)
@@ -80,7 +90,7 @@ async def health() -> HealthResponse:
 @router.get("/ready", response_model=HealthResponse)
 async def ready() -> HealthResponse:
     try:
-        runtime = get_rag_runtime()
+        runtime = _get_runtime()
         if runtime.retriever.vector_store is None:
             raise RuntimeError("Vector store is not loaded")
     except Exception as e:
@@ -90,7 +100,7 @@ async def ready() -> HealthResponse:
 
 @router.get("/config", response_model=ConfigResponse)
 async def config() -> ConfigResponse:
-    runtime = get_rag_runtime()
+    runtime = _get_runtime()
     return ConfigResponse(
         index_dir=str(runtime.index_dir),
         index_name=runtime.index_name,
@@ -115,7 +125,7 @@ async def search(request: SearchRequest) -> SearchResponse:
 @router.post("/ask", response_model=AskResponse)
 async def ask(request: AskRequest) -> AskResponse:
     started_at = time.perf_counter()
-    runtime = get_rag_runtime()
+    runtime = _get_runtime()
     chunks = await _retrieve_filtered(request.question, request.top_k, request.filters)
 
     if not chunks:
@@ -129,12 +139,31 @@ async def ask(request: AskRequest) -> AskResponse:
         )
 
     prompt, used_chunks = runtime.rag._build_prompt(request.question, chunks)
-    answer = await runtime.llm.arun(
-        prompt,
-        temperature=request.temperature,
-        max_tokens=request.max_tokens,
-    )
+    try:
+        answer = await runtime.llm.arun(
+            prompt,
+            temperature=request.temperature,
+            max_tokens=request.max_tokens,
+        )
+    except httpx.HTTPError as e:
+        logger.exception("LLM generation failed")
+        raise HTTPException(
+            status_code=503,
+            detail="LLM backend is temporarily unavailable. Retry in a few moments.",
+        ) from e
     answer = (answer or "").strip()
+
+    if looks_non_russian(answer):
+        rewrite_prompt = build_russian_rewrite_prompt(answer)
+        try:
+            answer_ru = await runtime.llm.arun(
+                rewrite_prompt,
+                temperature=0.0,
+                max_tokens=min(request.max_tokens, 500),
+            )
+            answer = (answer_ru or "").strip()
+        except httpx.HTTPError:
+            logger.warning("Russian rewrite step failed, keeping original answer")
 
     if _is_no_answer(answer):
         return AskResponse(

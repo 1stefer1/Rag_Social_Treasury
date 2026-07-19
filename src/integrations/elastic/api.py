@@ -3,7 +3,6 @@ from __future__ import annotations
 import glob
 import json
 import logging
-import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,6 +13,8 @@ import uvicorn
 from elasticsearch import Elasticsearch, helpers
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
+
+from src.settings.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -85,13 +86,10 @@ class HealthResponse(BaseModel):
     index_name: str
 
 
-def _env(name: str, default: str) -> str:
-    return os.environ.get(name, default).strip()
-
-
-ES_URL = _env("ES_URL", "http://elasticsearch:9200")
-ES_INDEX = _env("ES_INDEX", "kb_chunks")
-CHUNKS_DIR = Path(_env("CHUNKS_DIR", "/app/data/chunks_json"))
+settings = get_settings()
+ES_URL = settings.es_url
+ES_INDEX = settings.es_index
+CHUNKS_DIR = settings.chunks_dir
 
 
 @dataclass
@@ -263,9 +261,7 @@ def rebuild_index() -> RebuildResponse:
         indexed,
         perf_counter() - started,
     )
-    return RebuildResponse(
-        indexed_chunks=indexed, files_scanned=files_count, index_name=ES_INDEX
-    )
+    return RebuildResponse(indexed_chunks=indexed, files_scanned=files_count, index_name=ES_INDEX)
 
 
 @app.post("/es/index/upsert")
@@ -340,9 +336,7 @@ def search(request: SearchRequest) -> SearchResponse:
     )
     hits = resp.get("hits", {}).get("hits", [])
     total = resp.get("hits", {}).get("total", {})
-    total_hits = (
-        int(total.get("value", len(hits))) if isinstance(total, dict) else len(hits)
-    )
+    total_hits = int(total.get("value", len(hits))) if isinstance(total, dict) else len(hits)
 
     results: List[SearchHit] = []
     for h in hits:
@@ -373,9 +367,7 @@ def search(request: SearchRequest) -> SearchResponse:
 
 
 def main() -> None:
-    uvicorn.run(
-        "src.integrations.elastic.api:app", host="0.0.0.0", port=8010, reload=False
-    )
+    uvicorn.run("src.integrations.elastic.api:app", host="0.0.0.0", port=8010, reload=False)
 
 
 if __name__ == "__main__":

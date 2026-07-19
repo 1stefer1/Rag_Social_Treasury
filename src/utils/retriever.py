@@ -10,17 +10,17 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from src.utils.embedder import Embedder
 from src.utils.reranker import CrossEncoderReranker
-from src.utils.vector_store import SearchResult, StoredChunk, VectorStore
+from src.utils.vector_store import StoredChunk, VectorStore
 
 logger = logging.getLogger(__name__)
 
 
 try:
-    from rank_bm25 import BM25Okapi  # type: ignore
+    from rank_bm25 import BM25Okapi
 
     _HAS_BM25 = True
 except Exception:
-    BM25Okapi = None  # type: ignore
+    BM25Okapi = None
     _HAS_BM25 = False
 
 
@@ -85,9 +85,7 @@ class Retriever:
         Сохраняет готовый VectorStore на диск (FAISS индекс + метаданные).
         """
         if self.vector_store is None:
-            raise RuntimeError(
-                "VectorStore не инициализирован"
-            )
+            raise RuntimeError("VectorStore не инициализирован")
 
         dir_path = dir_path.resolve()
         dir_path.mkdir(parents=True, exist_ok=True)
@@ -170,43 +168,33 @@ class Retriever:
         chunks_dir = chunks_dir.resolve()
         paths = sorted(chunks_dir.glob(pattern))
         if not paths:
-            raise FileNotFoundError(
-                f"Не найдены файлы чанков по шаблону {pattern} в {chunks_dir}"
-            )
+            raise FileNotFoundError(f"Не найдены файлы чанков по шаблону {pattern} в {chunks_dir}")
 
         all_chunks: List[Dict[str, Any]] = []
         for p in paths:
             with p.open("r", encoding="utf-8") as f:
                 data = json.load(f)
             if not isinstance(data, list):
-                logger.warning(
-                    "Пропускаю %s: ожидался list, получили %s", p.name, type(data)
-                )
+                logger.warning("Пропускаю %s: ожидался list, получили %s", p.name, type(data))
                 continue
             all_chunks.extend(data)
 
         logger.info("Загружено чанков: %d из %d файлов", len(all_chunks), len(paths))
         self.build_from_chunks(all_chunks)
 
-    async def abuild_from_json_files(
-        self, chunks_dir: Path, pattern: str = "*.json"
-    ) -> None:
+    async def abuild_from_json_files(self, chunks_dir: Path, pattern: str = "*.json") -> None:
         await asyncio.to_thread(self.build_from_json_files, chunks_dir, pattern)
 
     # -------------------------
     # Retrieval
     # -------------------------
 
-    async def aretrieve(
-        self, query: str, *, top_k: Optional[int] = None
-    ) -> List[RetrievedChunk]:
+    async def aretrieve(self, query: str, *, top_k: Optional[int] = None) -> List[RetrievedChunk]:
         """
         Асинхронно возвращает релевантные чанки из векторного стора.
         """
         if self.vector_store is None:
-            raise RuntimeError(
-                "VectorStore не инициализирован. Сначала вызови build_from_*()."
-            )
+            raise RuntimeError("VectorStore не инициализирован. Сначала вызови build_from_*().")
 
         req_k = top_k or self.top_k
         req_k = int(req_k)
@@ -224,11 +212,11 @@ class Retriever:
 
         # FAISS-only path
         if not self.use_bm25 or self._bm25 is None:
-            candidates = [
+            semantic_candidates = [
                 RetrievedChunk(id=r.id, score=r.score, text=r.text, meta=r.meta)
                 for r in sem_results
             ]
-            return await self._maybe_rerank(query, candidates, req_k)
+            return await self._maybe_rerank(query, semantic_candidates, req_k)
 
         # BM25 candidates
         q_tokens = _tokenize(query)
@@ -240,9 +228,9 @@ class Retriever:
         k_bm = min(int(self.bm25_candidates_k), len(bm_scores))
         bm_top_pos: List[int] = []
         if k_bm > 0:
-            bm_top_pos = sorted(
-                range(len(bm_scores)), key=lambda i: bm_scores[i], reverse=True
-            )[:k_bm]
+            bm_top_pos = sorted(range(len(bm_scores)), key=lambda i: bm_scores[i], reverse=True)[
+                :k_bm
+            ]
 
         # Map semantic results to positions
         sem_pos_score: Dict[int, float] = {}
@@ -275,9 +263,7 @@ class Retriever:
         for score, pos in scored:
             item = self.vector_store.store[pos]
             candidates.append(
-                RetrievedChunk(
-                    id=item.id, score=float(score), text=item.text, meta=item.meta
-                )
+                RetrievedChunk(id=item.id, score=float(score), text=item.text, meta=item.meta)
             )
         return await self._maybe_rerank(query, candidates, req_k)
 
@@ -298,16 +284,12 @@ class Retriever:
 
         scores = await self._reranker.ascore(query, [c.text for c in pool])
         if len(scores) != len(pool):
-            logger.warning(
-                "Reranker returned %d scores for %d passages", len(scores), len(pool)
-            )
+            logger.warning("Reranker returned %d scores for %d passages", len(scores), len(pool))
             return candidates[:top_k]
 
         reranked = []
         for c, s in zip(pool, scores):
-            reranked.append(
-                RetrievedChunk(id=c.id, score=float(s), text=c.text, meta=c.meta)
-            )
+            reranked.append(RetrievedChunk(id=c.id, score=float(s), text=c.text, meta=c.meta))
         reranked.sort(key=lambda x: x.score, reverse=True)
         return reranked[:top_k]
 

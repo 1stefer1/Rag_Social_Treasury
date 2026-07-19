@@ -88,9 +88,7 @@ def _iter_block_items(doc: DocxDocument) -> Iterable[DocxParagraph | Table]:
             yield Table(child, doc)
 
 
-def _table_to_rows(
-    tbl: Table, *, max_rows: int = 5000, max_row_chars: int = 800
-) -> List[str]:
+def _table_to_rows(tbl: Table, *, max_rows: int = 5000, max_row_chars: int = 800) -> List[str]:
     """Преобразует таблицу в список строк (по строкам таблицы).
 
     Важно: не склеиваем всю таблицу в один гигантский блок — это ухудшает чанкирование
@@ -188,9 +186,7 @@ def _match_section(text: str, *, in_appendix: bool) -> Optional[str]:
 # -----------------------------
 
 
-def _split_long_text(
-    text: str, *, max_chars: int = 2500, overlap: int = 200
-) -> List[str]:
+def _split_long_text(text: str, *, max_chars: int = 2500, overlap: int = 200) -> List[str]:
     text = text.strip()
     if len(text) <= max_chars:
         return [text]
@@ -219,6 +215,7 @@ def _split_long_text(
         if end >= n:
             break
     return parts
+
 
 def _merge_short_neighbor_chunks(
     chunks: List[Dict[str, Any]],
@@ -386,17 +383,13 @@ def parse_decree_docx(
         if not text:
             return
 
-        pieces = _split_long_text(
-            text, max_chars=max_chunk_chars, overlap=overlap_chars
-        )
+        pieces = _split_long_text(text, max_chars=max_chunk_chars, overlap=overlap_chars)
         for idx, piece in enumerate(pieces, 1):
             clause_value: Optional[str]
             if len(pieces) == 1:
                 clause_value = current_clause
             else:
-                clause_value = (
-                    f"{current_clause}#{idx}" if current_clause else f"PREAMBLE#{idx}"
-                )
+                clause_value = f"{current_clause}#{idx}" if current_clause else f"PREAMBLE#{idx}"
 
             chunks.append(
                 {

@@ -1,8 +1,9 @@
 from pathlib import Path
+
 from src.utils.embedder import Embedder
 from src.utils.vector_store import VectorStore
 
-embedder = Embedder()  
+embedder = Embedder()
 
 vs = VectorStore.load(Path("data/faiss_index"), name="kb_test")
 

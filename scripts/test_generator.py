@@ -4,7 +4,6 @@ import logging
 
 from src.utils.generator import LLM
 
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",

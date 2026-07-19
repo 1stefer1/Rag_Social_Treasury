@@ -4,18 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 
 from telegram import Update
-from telegram.error import TimedOut, NetworkError
+from telegram.error import NetworkError, TimedOut
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
-    MessageHandler,
     ContextTypes,
+    MessageHandler,
     filters,
 )
 
+from src.settings.config import get_settings
 from src.utils.rag_pipeline import VanillaRAG
 from src.utils.rag_runtime import create_rag_runtime
 
@@ -83,15 +83,15 @@ async def main() -> None:
         format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
     )
 
-    token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    if not token:
+    token = get_settings().telegram_bot_token
+    if token is None:
         raise RuntimeError("Не задан TELEGRAM_BOT_TOKEN")
 
     bot = TelegramRAGBot()
 
     application = (
         ApplicationBuilder()
-        .token(token)
+        .token(token.get_secret_value())
         .connect_timeout(30.0)
         .read_timeout(30.0)
         .write_timeout(30.0)
@@ -100,9 +100,7 @@ async def main() -> None:
     )
 
     application.add_handler(CommandHandler("start", bot.start))
-    application.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_question)
-    )
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_question))
 
     logger.info("Telegram bot запускается")
 
@@ -112,17 +110,15 @@ async def main() -> None:
         await application.updater.start_polling()
         await asyncio.Event().wait()
 
-    except TimedOut:
+    except TimedOut as exc:
         logger.exception("Timeout при подключении к Telegram API")
         raise RuntimeError(
             "Не удалось подключиться к Telegram API. "
             "Скорее всего проблема в сети, VPN, прокси или блокировке Telegram."
-        )
-    except NetworkError:
+        ) from exc
+    except NetworkError as exc:
         logger.exception("Сетевая ошибка при подключении к Telegram API")
-        raise RuntimeError(
-            "Сетевая ошибка при подключении к Telegram API."
-        )
+        raise RuntimeError("Сетевая ошибка при подключении к Telegram API.") from exc
     finally:
         try:
             await application.updater.stop()

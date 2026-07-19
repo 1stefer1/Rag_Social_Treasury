@@ -17,9 +17,7 @@ class DocKey:
 
 
 _DATE_RE = re.compile(r"\b(\d{2}\.\d{2}\.\d{4})\b")
-_NUM_RE = re.compile(
-    r"(?i)(?:№|\bN\b)\s*([0-9]+(?:[-–—][0-9]+)?(?:[-–—][A-Za-zА-Яа-я0-9]+)?)"
-)
+_NUM_RE = re.compile(r"(?i)(?:№|\bN\b)\s*([0-9]+(?:[-–—][0-9]+)?(?:[-–—][A-Za-zА-Яа-я0-9]+)?)")
 _OT_DATE_RE = re.compile(r"(?i)\bот\s*(\d{2}\.\d{2}\.\d{4})\b")
 
 
@@ -94,11 +92,7 @@ def extract_doc_keys(text: str) -> list[DocKey]:
         date = m.group(1)
         raw_num = m.group(3)
         tail = s[m.end(3) : m.end(3) + 12]
-        keys.append(
-            DocKey(
-                doc_type=doc_type, date=date, number=_normalize_number(raw_num, tail)
-            )
-        )
+        keys.append(DocKey(doc_type=doc_type, date=date, number=_normalize_number(raw_num, tail)))
 
     # Pattern 2: "№ <num> ... от <date>" (some sources use this order)
     for m in re.finditer(
@@ -108,11 +102,7 @@ def extract_doc_keys(text: str) -> list[DocKey]:
         raw_num = m.group(1)
         date = m.group(3)
         tail = s[m.end(1) : m.end(1) + 12]
-        keys.append(
-            DocKey(
-                doc_type=doc_type, date=date, number=_normalize_number(raw_num, tail)
-            )
-        )
+        keys.append(DocKey(doc_type=doc_type, date=date, number=_normalize_number(raw_num, tail)))
 
     # Fallback: best-effort if we only have one date and one number.
     if not keys:
@@ -228,14 +218,10 @@ def main() -> int:
     ws = wb[args.sheet]
 
     header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
-    col = {
-        str(name).strip(): i for i, name in enumerate(header_row) if name is not None
-    }
+    col = {str(name).strip(): i for i, name in enumerate(header_row) if name is not None}
     for required in ("Вопрос", "Ответ", "Источник"):
         if required not in col:
-            raise KeyError(
-                f"Required column '{required}' not found in sheet '{args.sheet}'"
-            )
+            raise KeyError(f"Required column '{required}' not found in sheet '{args.sheet}'")
 
     idx_id = col.get("№")
     idx_q = col["Вопрос"]

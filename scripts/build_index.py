@@ -1,8 +1,7 @@
 import asyncio
 import logging
-from pathlib import Path
-
 import sys
+from pathlib import Path
 
 # allow running as: python scripts/build_index.py
 sys.path.append(str(Path(__file__).resolve().parents[1]))

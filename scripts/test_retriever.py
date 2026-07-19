@@ -1,7 +1,6 @@
 import asyncio
-from pathlib import Path
-
 import sys
+from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
@@ -18,9 +17,7 @@ async def main():
 
     await retriever.abuild_from_json_files(chunks_dir)
 
-    results = await retriever.aretrieve(
-        "кто назначает и выплачивает единовременную выплату?"
-    )
+    results = await retriever.aretrieve("кто назначает и выплачивает единовременную выплату?")
     for r in results:
         print(r.score, r.meta.get("source_file"), r.meta.get("clause"))
         print(r.text[:200])

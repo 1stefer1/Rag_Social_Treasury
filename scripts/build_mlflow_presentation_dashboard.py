@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -11,14 +12,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-import sys
-
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 import mlflow
 
 from src.utils.eval_tracker import EvalTracker
-
 
 CORE_METRICS = [
     "faithfulness",
@@ -165,7 +163,10 @@ def _load_hypothesis_rows(tracking_uri: str, experiment_name: str) -> List[Dict[
             grouped[hypothesis_name] = row
             continue
 
-        existing_score = (_score_completeness(existing), existing.get("run_origin") == "eval_script")
+        existing_score = (
+            _score_completeness(existing),
+            existing.get("run_origin") == "eval_script",
+        )
         new_score = (_score_completeness(row), row.get("run_origin") == "eval_script")
         if new_score > existing_score:
             grouped[hypothesis_name] = row
@@ -217,7 +218,9 @@ def _build_artifacts(rows: List[Dict[str, Any]], output_dir: Path) -> None:
     ax.set_xlabel("Synthetic score")
     ax.set_xlim(0.0, max(values) * 1.15 if values else 1.0)
     for bar, value in zip(bars, values[::-1]):
-        ax.text(bar.get_width() + 0.01, bar.get_y() + bar.get_height() / 2, f"{value:.3f}", va="center")
+        ax.text(
+            bar.get_width() + 0.01, bar.get_y() + bar.get_height() / 2, f"{value:.3f}", va="center"
+        )
     fig.tight_layout()
     fig.savefig(output_dir / "presentation_score_leaderboard.png", dpi=180, bbox_inches="tight")
     plt.close(fig)
@@ -257,7 +260,9 @@ def _build_artifacts(rows: List[Dict[str, Any]], output_dir: Path) -> None:
         y_val = row["faithfulness_t"]
         size = 220 + 1000 * row["context_relevance_t"]
         color = color_map.get(row["retriever"], "#2A9D8F")
-        ax.scatter(x_val, y_val, s=size, alpha=0.78, color=color, edgecolors="#1F1F1F", linewidths=0.8)
+        ax.scatter(
+            x_val, y_val, s=size, alpha=0.78, color=color, edgecolors="#1F1F1F", linewidths=0.8
+        )
         ax.text(x_val + 0.006, y_val + 0.006, row["hypothesis_name"], fontsize=9)
     ax.set_xlim(0.0, 1.0)
     ax.set_ylim(0.0, 1.0)
@@ -282,13 +287,17 @@ def _build_artifacts(rows: List[Dict[str, Any]], output_dir: Path) -> None:
         fig, ax = plt.subplots(figsize=(12, 7))
         im = ax.imshow(data, cmap="magma", aspect="auto", vmin=0.0, vmax=1.0)
         ax.set_xticks(np.arange(len(metrics_for_heatmap)))
-        ax.set_xticklabels([key.replace("_t", "") for key in metrics_for_heatmap], rotation=25, ha="right")
+        ax.set_xticklabels(
+            [key.replace("_t", "") for key in metrics_for_heatmap], rotation=25, ha="right"
+        )
         ax.set_yticks(np.arange(len(heat_rows)))
         ax.set_yticklabels([row["hypothesis_name"] for row in heat_rows])
         ax.set_title("Hypothesis Heatmap")
         for i in range(data.shape[0]):
             for j in range(data.shape[1]):
-                ax.text(j, i, f"{data[i, j]:.2f}", ha="center", va="center", color="white", fontsize=8)
+                ax.text(
+                    j, i, f"{data[i, j]:.2f}", ha="center", va="center", color="white", fontsize=8
+                )
         fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
         fig.tight_layout()
         fig.savefig(output_dir / "hypothesis_heatmap.png", dpi=180, bbox_inches="tight")
@@ -357,11 +366,7 @@ def main() -> int:
         )
 
         for step, row in enumerate(rows):
-            metrics = {
-                key: row[key]
-                for key in row.keys()
-                if key.endswith("_t")
-            }
+            metrics = {key: row[key] for key in row.keys() if key.endswith("_t")}
             tracker.log_metrics(metrics, step=step)
 
         best = rows[0]

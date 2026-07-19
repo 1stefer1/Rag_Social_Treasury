@@ -1,3 +1,24 @@
+x-rag-environment: &rag-environment
+  APP_ENV: ${APP_ENV:-development}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  INDEX_DIR: /app/data/faiss_index
+  INDEX_NAME: ${INDEX_NAME:-moscow_kb}
+  TOP_K: ${TOP_K:-5}
+  USE_BM25: ${USE_BM25:-false}
+  BM25_WEIGHT: ${BM25_WEIGHT:-0.25}
+  BM25_CANDIDATES_K: ${BM25_CANDIDATES_K:-50}
+  USE_RERANKER: ${USE_RERANKER:-true}
+  RERANKER_MODEL: ${RERANKER_MODEL:-cross-encoder/mmarco-mMiniLMv2-L12-H384-v1}
+  RERANKER_CANDIDATES_K: ${RERANKER_CANDIDATES_K:-50}
+  MAX_CONTEXT_CHARS: ${MAX_CONTEXT_CHARS:-14000}
+  LLM_PROVIDER: ${LLM_PROVIDER:-openai_compatible}
+  OPENAI_BASE_URL: ${OPENAI_BASE_URL:-http://customer-llm:8000/v1}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  OPENAI_MODEL: ${OPENAI_MODEL:-customer-model}
+  OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+  OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b-instruct}
+  LLM_TIMEOUT: ${LLM_TIMEOUT:-180}
+
 services:
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.15.2
@@ -8,79 +29,70 @@ services:
     ports:
       - "${ES_PORT:-9200}:9200"
     volumes:
-      - es_data:/usr/share/elasticsearch/data
-    restart: unless-stopped
-
-  es-search-api:
-    image: rag-kb-service:local
-    pull_policy: never
-    environment:
-      ES_URL: http://elasticsearch:9200
-      ES_INDEX: ${ES_INDEX:-kb_chunks}
-      CHUNKS_DIR: /app/data/chunks_json
-    command: ["uvicorn", "src.integrations.elastic.api:app", "--host", "0.0.0.0", "--port", "8010"]
-    depends_on:
-      - elasticsearch
-    ports:
-      - "${ES_API_PORT:-8010}:8010"
-    volumes:
-      - ./data/chunks_json:/app/data/chunks_json:ro
-      - ./logs:/app/logs
+      - es-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:9200/_cluster/health >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     restart: unless-stopped
 
   rag-api:
-    build: .
+    build:
+      context: .
+      target: runtime
     image: rag-kb-service:local
     environment:
-      INDEX_DIR: /app/data/faiss_index
-      INDEX_NAME: ${INDEX_NAME:-moscow_kb}
-      TOP_K: ${TOP_K:-5}
-      USE_BM25: ${USE_BM25:-0}
-      USE_RERANKER: ${USE_RERANKER:-1}
-      RERANKER_MODEL: ${RERANKER_MODEL:-cross-encoder/mmarco-mMiniLMv2-L12-H384-v1}
-      RERANKER_CANDIDATES_K: ${RERANKER_CANDIDATES_K:-50}
-      LLM_PROVIDER: ${LLM_PROVIDER:-openai_compatible}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-http://customer-llm:8000/v1}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-dummy}
-      OPENAI_MODEL: ${OPENAI_MODEL:-customer-model}
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b-instruct}
-      LLM_TIMEOUT: ${LLM_TIMEOUT:-180}
+      <<: *rag-environment
       API_SECRET: ${API_SECRET:-}
     ports:
       - "${RAG_API_PORT:-8000}:8000"
     volumes:
       - ./data/faiss_index:/app/data/faiss_index:ro
       - ./logs:/app/logs
-    restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=5)"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 60s
+    restart: unless-stopped
+
+  es-search-api:
+    image: rag-kb-service:local
+    pull_policy: never
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ES_URL: http://elasticsearch:9200
+      ES_INDEX: ${ES_INDEX:-kb_chunks}
+      CHUNKS_DIR: /app/data/chunks_json
+    command: ["uvicorn", "src.integrations.elastic.api:app", "--host", "0.0.0.0", "--port", "8010"]
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    ports:
+      - "${ES_API_PORT:-8010}:8010"
+    volumes:
+      - ./data/chunks_json:/app/data/chunks_json:ro
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/es/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
 
   gradio-ui:
     image: rag-kb-service:local
     pull_policy: never
     environment:
-      INDEX_DIR: /app/data/faiss_index
-      INDEX_NAME: ${INDEX_NAME:-moscow_kb}
+      <<: *rag-environment
       GRADIO_HOST: 0.0.0.0
       GRADIO_PORT: 7860
-      TOP_K: ${TOP_K:-5}
-      USE_BM25: ${USE_BM25:-0}
-      USE_RERANKER: ${USE_RERANKER:-1}
-      RERANKER_MODEL: ${RERANKER_MODEL:-cross-encoder/mmarco-mMiniLMv2-L12-H384-v1}
-      RERANKER_CANDIDATES_K: ${RERANKER_CANDIDATES_K:-50}
-      LLM_PROVIDER: ${LLM_PROVIDER:-openai_compatible}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-http://customer-llm:8000/v1}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-dummy}
-      OPENAI_MODEL: ${OPENAI_MODEL:-customer-model}
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b-instruct}
-      LLM_TIMEOUT: ${LLM_TIMEOUT:-180}
-      ES_SEARCH_API_URL: ${ES_SEARCH_API_URL:-http://es-search-api:8010}
+      ES_SEARCH_API_URL: http://es-search-api:8010
     command: ["python", "-m", "src.integrations.gradio.app"]
     ports:
       - "${GRADIO_PORT:-7860}:7860"
@@ -88,8 +100,10 @@ services:
       - ./data/faiss_index:/app/data/faiss_index:ro
       - ./logs:/app/logs
     depends_on:
-      - rag-api
-      - es-search-api
+      rag-api:
+        condition: service_healthy
+      es-search-api:
+        condition: service_healthy
     restart: unless-stopped
 
   telegram-bot:
@@ -97,35 +111,26 @@ services:
     pull_policy: never
     profiles: ["telegram"]
     environment:
-      INDEX_DIR: /app/data/faiss_index
-      INDEX_NAME: ${INDEX_NAME:-moscow_kb}
-      TOP_K: ${TOP_K:-5}
-      USE_RERANKER: ${USE_RERANKER:-1}
-      RERANKER_MODEL: ${RERANKER_MODEL:-cross-encoder/mmarco-mMiniLMv2-L12-H384-v1}
-      RERANKER_CANDIDATES_K: ${RERANKER_CANDIDATES_K:-50}
-      LLM_PROVIDER: ${LLM_PROVIDER:-openai_compatible}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-http://customer-llm:8000/v1}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-dummy}
-      OPENAI_MODEL: ${OPENAI_MODEL:-customer-model}
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b-instruct}
-      LLM_TIMEOUT: ${LLM_TIMEOUT:-180}
+      <<: *rag-environment
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
     command: ["python", "-m", "src.integrations.telegram.bot"]
     volumes:
       - ./data/faiss_index:/app/data/faiss_index:ro
       - ./logs:/app/logs
+    depends_on:
+      rag-api:
+        condition: service_healthy
     restart: unless-stopped
 
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.9.6
     profiles: ["ollama"]
     ports:
       - "11434:11434"
     volumes:
-      - ollama:/root/.ollama
+      - ollama-data:/root/.ollama
     restart: unless-stopped
 
 volumes:
-  ollama:
-  es_data:
+  es-data:
+  ollama-data:

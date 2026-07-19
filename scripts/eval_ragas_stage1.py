@@ -3,15 +3,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
+import math
+import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import mean
-import time
 from typing import Any, Dict, List, Optional
-import math
-import json
-
-import sys
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
@@ -28,13 +27,13 @@ from ragas.run_config import RunConfig
 from src.utils.embedder import Embedder
 from src.utils.eval_tracker import EvalTracker
 from src.utils.generator import LLM
-from src.utils.retriever import Retriever
 from src.utils.rag_pipeline import VanillaRAG
 from src.utils.ragas_support import (
     E5RagasEmbeddings,
     OllamaRagasLLM,
     warmup_embedder,
 )
+from src.utils.retriever import Retriever
 
 
 @dataclass
@@ -276,9 +275,7 @@ async def main() -> int:
     )
     ap.add_argument("--bm25-weight", type=float, default=0.25)
     ap.add_argument("--bm25-candidates-k", type=int, default=50)
-    ap.add_argument(
-        "--use-reranker", action="store_true", help="Enable cross-encoder reranking"
-    )
+    ap.add_argument("--use-reranker", action="store_true", help="Enable cross-encoder reranking")
     ap.add_argument(
         "--reranker-model",
         default="cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
@@ -467,7 +464,13 @@ async def main() -> int:
 
         # Print quick summary
         print(f"Rows evaluated: {len(rows)}")
-        for key in ("faithfulness", "answer_relevance", "context_precision", "context_recall", "context_relevance"):
+        for key in (
+            "faithfulness",
+            "answer_relevance",
+            "context_precision",
+            "context_recall",
+            "context_relevance",
+        ):
             value = summary.get(key)
             if value is not None:
                 print(f"{key}: mean={value:.4f}")

@@ -182,9 +182,9 @@ cython_debug/
 .abstra/
 
 # Visual Studio Code
-#  Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore 
+#  Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore
 #  that can be found at https://github.com/github/gitignore/blob/main/Global/VisualStudioCode.gitignore
-#  and can be added to the global gitignore or merged into this file. However, if you prefer, 
+#  and can be added to the global gitignore or merged into this file. However, if you prefer,
 #  you could uncomment the following to ignore the entire vscode folder
 # .vscode/
 
@@ -208,7 +208,46 @@ __marimo__/
 .vscode
 logs/
 /.env
+.env.*
+!.env.example
 mlruns/
 mlartifacts/
 mlflow.db
 mlflow_test.db
+
+# IDE and OS metadata
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.tmp
+~$*
+
+# Local ML/data artifacts (small fixtures under tests/fixtures remain tracked)
+/data/raw_docx/
+/data/chunks_json/
+/data/faiss*/
+/data/gold/
+/data/embeddings/
+/data/elasticsearch/
+/models/
+/datasets/
+/documents/
+/checkpoints/
+/outputs/
+/runs/
+/artifacts/
+/wandb/
+*.faiss
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.xlsx
+
+# Docker volumes and test artifacts
+/volumes/
+/docker-data/
+/test-results/
+coverage.json

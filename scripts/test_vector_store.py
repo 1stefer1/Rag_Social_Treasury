@@ -1,8 +1,7 @@
-import numpy as np
 from pathlib import Path
 
 from src.utils.embedder import Embedder
-from src.utils.vector_store import VectorStore, StoredChunk
+from src.utils.vector_store import StoredChunk, VectorStore
 
 embedder = Embedder()
 texts = ["пункт 1. что-то", "пункт 2. другое"]

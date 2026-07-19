@@ -1,27 +1,91 @@
 [project]
 name = "rag-template"
 version = "0.1.0"
-description = "Add your description here"
+description = "Production-oriented RAG service for Russian legal and social-support documents"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "datasets>=4.3.0",
     "fastapi>=0.121.3",
     "gradio>=5.49.1",
     "pydantic>=2.12.4",
     "pydantic-settings>=2.12.0",
     "python-docx>=1.2.0",
     "uvicorn>=0.38.0",
-    "matplotlib>=3.10.7",
-    "mlflow>=3.5.1",
     "sentence-transformers>=3.0.0",
+    "torch>=2.3.0,<3.0.0",
     "faiss-cpu>=1.8.0",
     "numpy>=2.0.0",
     "httpx>=0.28.1",
     "python-telegram-bot>=21.0",
-    "openpyxl>=3.1.5",
-    "ragas>=0.4.3",
-    "tqdm>=4.67.1",
     "rank-bm25>=0.2.2",
     "elasticsearch>=8.15.1,<9.0.0",
 ]
+
+[project.optional-dependencies]
+evaluation = [
+    "datasets>=4.3.0,<5.0.0",
+    "matplotlib>=3.10.0,<4.0.0",
+    "mlflow>=3.5.0,<4.0.0",
+    "openpyxl>=3.1.0,<4.0.0",
+    "ragas>=0.4.0,<0.5.0",
+    "tqdm>=4.67.0,<5.0.0",
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[dependency-groups]
+dev = [
+    "detect-secrets>=1.5.0,<2.0.0",
+    "mypy>=1.15.0,<2.0.0",
+    "pre-commit>=4.2.0,<5.0.0",
+    "pytest>=8.3.0,<9.0.0",
+    "pytest-asyncio>=0.26.0,<1.0.0",
+    "pytest-cov>=6.1.0,<7.0.0",
+    "ruff>=0.11.0,<1.0.0",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = ["data"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]
+ignore = ["E501", "B905"]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/*.py" = ["T201"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+check_untyped_defs = true
+ignore_missing_imports = true
+explicit_package_bases = true
+exclude = ["data/", "scripts/"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra --strict-markers"
+markers = [
+    "unit: fast tests without external services or model downloads",
+    "integration: tests that exercise component boundaries with fakes or local services",
+]
+
+[tool.coverage.run]
+source = ["src"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true

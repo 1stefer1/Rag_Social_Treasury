@@ -4,14 +4,14 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Sequence, Tuple
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
 try:
-    import faiss  # type: ignore
+    import faiss
 except ImportError as e:
     raise ImportError(
         "faiss не установлен. Добавь зависимость 'faiss-cpu' в pyproject.toml и сделай uv sync."
@@ -23,6 +23,7 @@ class StoredChunk:
     """
     То, что мы храним параллельно с FAISS (потому что FAISS хранит только вектора).
     """
+
     id: str
     text: str
     meta: Dict[str, Any]
@@ -50,6 +51,7 @@ class VectorStore:
         self.dim = dim
         self.index = faiss.IndexFlatIP(dim)
         self.store: List[StoredChunk] = []
+
     # -------------------------
     # Public API
     # -------------------------
@@ -69,7 +71,9 @@ class VectorStore:
         start_size = len(self.store)
         self.index.add(vectors)
         self.store.extend(chunks)
-        logger.info("Добавлено %d векторов. Store: %d -> %d", vectors.shape[0], start_size, len(self.store))
+        logger.info(
+            "Добавлено %d векторов. Store: %d -> %d", vectors.shape[0], start_size, len(self.store)
+        )
 
     def search(self, query_vector: np.ndarray, top_k: int = 5) -> List[SearchResult]:
         """
@@ -190,7 +194,9 @@ class VectorStore:
 
         if query_vector.ndim == 1:
             if query_vector.shape[0] != self.dim:
-                raise ValueError(f"Ожидалась форма (D,), D={self.dim}, получено {query_vector.shape}")
+                raise ValueError(
+                    f"Ожидалась форма (D,), D={self.dim}, получено {query_vector.shape}"
+                )
             q = query_vector.reshape(1, -1)
         elif query_vector.ndim == 2:
             if query_vector.shape != (1, self.dim):

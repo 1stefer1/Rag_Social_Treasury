@@ -1,45 +1,40 @@
-FROM python:3.12-slim
+# syntax=docker/dockerfile:1.7
+FROM python:3.12.11-slim-bookworm AS builder
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir "uv==0.8.4"
+
+COPY pyproject.toml uv.lock ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --no-install-project
+
+
+FROM python:3.12.11-slim-bookworm AS runtime
+
+ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libgomp1 \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 10001 app \
+    && useradd --uid 10001 --gid app --create-home --no-log-init app
 
-# Install CPU-only torch first. This prevents pulling CUDA/nvidia wheels when
-# sentence-transformers is installed later from PyPI.
-RUN pip install --no-cache-dir \
-    --index-url https://download.pytorch.org/whl/cpu \
-    torch
+COPY --from=builder --chown=app:app /app/.venv /app/.venv
+COPY --chown=app:app main.py ./main.py
+COPY --chown=app:app src ./src
 
-RUN pip install --no-cache-dir \
-    --index-url https://pypi.org/simple \
-    fastapi>=0.121.3 \
-    uvicorn>=0.38.0 \
-    pydantic>=2.12.4 \
-    pydantic-settings>=2.12.0 \
-    python-docx>=1.2.0 \
-    sentence-transformers>=3.0.0 \
-    faiss-cpu>=1.8.0 \
-    numpy>=2.0.0 \
-    httpx>=0.28.1 \
-    python-telegram-bot>=21.0 \
-    rank-bm25>=0.2.2 \
-    gradio>=5.49.1 \
-    "elasticsearch>=8.15.1,<9.0.0"
+RUN mkdir -p /app/data/faiss_index /app/logs && chown -R app:app /app
 
-COPY main.py ./main.py
-COPY src ./src
-
-RUN useradd -m -u 10001 appuser \
-    && mkdir -p /app/data/faiss_index /app/logs \
-    && chown -R appuser:appuser /app
-
-USER appuser
+USER app
 
 EXPOSE 8000
 

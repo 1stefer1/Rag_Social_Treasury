@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import logging
-import os
-from typing import Any, Dict, Optional
+from typing import Any
 
 import httpx
+
+from src.settings.config import Settings, get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -24,40 +25,35 @@ class LLM:
         base_url: str = "http://localhost:11434",
         timeout: float = 120.0,
         system_prompt: str = "Ты помощник. Отвечай строго по предоставленному контексту.",
+        config: Settings | None = None,
     ) -> None:
-        self.provider = os.environ.get("LLM_PROVIDER", "ollama").strip().lower()
-        env_timeout = os.environ.get("LLM_TIMEOUT") or os.environ.get("OLLAMA_TIMEOUT")
+        config = config or get_settings()
+        self.provider = config.llm_provider
 
         if self.provider in ("openai", "openai_compatible", "vllm"):
             self.provider = "openai_compatible"
             self.model = (
-                os.environ.get("OPENAI_MODEL")
-                or os.environ.get("VLLM_MODEL")
-                or model
-            ).strip()
+                config.openai_model.strip() if "openai_model" in config.model_fields_set else model
+            )
             self.base_url = (
-                os.environ.get("OPENAI_BASE_URL")
-                or os.environ.get("VLLM_BASE_URL")
-                or "http://localhost:8000/v1"
-            ).rstrip("/")
-            self.api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("VLLM_API_KEY") or ""
+                config.openai_base_url.rstrip("/")
+                if "openai_base_url" in config.model_fields_set
+                else "http://localhost:8000/v1"
+            )
+            self.api_key = config.openai_api_key.get_secret_value() if config.openai_api_key else ""
         else:
             self.provider = "ollama"
-            self.model = (os.environ.get("OLLAMA_MODEL") or model).strip()
-            self.base_url = (os.environ.get("OLLAMA_BASE_URL") or base_url).rstrip("/")
+            self.model = (
+                config.ollama_model.strip() if "ollama_model" in config.model_fields_set else model
+            )
+            self.base_url = (
+                config.ollama_base_url.rstrip("/")
+                if "ollama_base_url" in config.model_fields_set
+                else base_url.rstrip("/")
+            )
             self.api_key = ""
 
-        if env_timeout:
-            try:
-                timeout = float(env_timeout)
-            except ValueError:
-                logger.warning(
-                    "Invalid LLM timeout=%r, using default timeout=%s",
-                    env_timeout,
-                    timeout,
-                )
-
-        self.timeout = timeout
+        self.timeout = config.llm_timeout if "llm_timeout" in config.model_fields_set else timeout
         self.system_prompt = system_prompt
 
     async def arun(
@@ -66,7 +62,7 @@ class LLM:
         *,
         temperature: float = 0.0,
         max_tokens: int = 300,
-        extra_options: Optional[Dict[str, Any]] = None,
+        extra_options: dict[str, Any] | None = None,
     ) -> str:
         if self.provider == "openai_compatible":
             return await self._run_openai_compatible(
@@ -88,11 +84,11 @@ class LLM:
         *,
         temperature: float,
         max_tokens: int,
-        extra_options: Optional[Dict[str, Any]],
+        extra_options: dict[str, Any] | None,
     ) -> str:
         url = f"{self.base_url}/api/chat"
 
-        options: Dict[str, Any] = {
+        options: dict[str, Any] = {
             "temperature": temperature,
             "num_predict": max_tokens,
             "num_ctx": 2048,
@@ -100,7 +96,7 @@ class LLM:
         if extra_options:
             options.update(extra_options)
 
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "model": self.model,
             "stream": False,
             "messages": [
@@ -124,11 +120,9 @@ class LLM:
                 r.raise_for_status()
                 data = r.json()
         except httpx.HTTPStatusError as e:
-            body = e.response.text if e.response is not None else "<no body>"
             logger.error(
-                "LLM HTTP error: status=%s body=%s",
+                "LLM HTTP error: status=%s",
                 e.response.status_code if e.response else "unknown",
-                body,
             )
             raise
         except httpx.HTTPError:
@@ -139,7 +133,11 @@ class LLM:
         content = (msg.get("content") or "").strip()
 
         if not content:
-            logger.warning("LLM returned empty content. provider=%s model=%s", self.provider, self.model)
+            logger.warning(
+                "LLM returned empty content. provider=%s model=%s",
+                self.provider,
+                self.model,
+            )
 
         return content
 
@@ -149,10 +147,10 @@ class LLM:
         *,
         temperature: float,
         max_tokens: int,
-        extra_options: Optional[Dict[str, Any]],
+        extra_options: dict[str, Any] | None,
     ) -> str:
         url = f"{self.base_url}/chat/completions"
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "model": self.model,
             "temperature": temperature,
             "max_tokens": max_tokens,
@@ -164,7 +162,7 @@ class LLM:
         if extra_options:
             payload.update(extra_options)
 
-        headers: Dict[str, str] = {}
+        headers: dict[str, str] = {}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
@@ -182,11 +180,9 @@ class LLM:
                 r.raise_for_status()
                 data = r.json()
         except httpx.HTTPStatusError as e:
-            body = e.response.text if e.response is not None else "<no body>"
             logger.error(
-                "LLM HTTP error: status=%s body=%s",
+                "LLM HTTP error: status=%s",
                 e.response.status_code if e.response else "unknown",
-                body,
             )
             raise
         except httpx.HTTPError:
@@ -200,6 +196,10 @@ class LLM:
             content = (message.get("content") or "").strip()
 
         if not content:
-            logger.warning("LLM returned empty content. provider=%s model=%s", self.provider, self.model)
+            logger.warning(
+                "LLM returned empty content. provider=%s model=%s",
+                self.provider,
+                self.model,
+            )
 
         return content
