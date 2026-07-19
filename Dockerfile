@@ -31,8 +31,9 @@ RUN apt-get update \
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 COPY --chown=app:app main.py ./main.py
 COPY --chown=app:app src ./src
+COPY --chown=app:app scripts/build_index.py ./scripts/build_index.py
 
-RUN mkdir -p /app/data/faiss_index /app/logs && chown -R app:app /app
+RUN mkdir -p /app/logs && chown -R app:app /app
 
 USER app
 

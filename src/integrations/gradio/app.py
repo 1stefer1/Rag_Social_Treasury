@@ -157,7 +157,10 @@ async def _search_async(query: str, top_k: int) -> Tuple[List[List[Any]], str]:
             }
         )
 
-    note = f"Найдено фрагментов: {len(rows)}. Индекс: {RUNTIME.index_name}."
+    note = (
+        f"Найдено фрагментов: {len(rows)}. "
+        f"Qdrant: {RUNTIME.qdrant_collection}; Elasticsearch: {RUNTIME.es_index}."
+    )
     return _format_retrieval_table(rows), note
 
 
@@ -245,7 +248,7 @@ async def _ask_async(
 
     meta_lines = [
         f"Использовано чанков: {used_top_k}",
-        f"Индекс: {RUNTIME.index_name}",
+        f"Qdrant: {RUNTIME.qdrant_collection}; Elasticsearch: {RUNTIME.es_index}",
     ]
     if enable_metadata_filters:
         summary = _metadata_filter_summary(filters)
@@ -284,7 +287,7 @@ def get_documents_placeholder() -> Tuple[str, str]:
         "Планируемый поток: drag-and-drop -> сохранение в raw_docx -> chunking -> rebuild индекса."
     )
     status = (
-        f"Текущий индекс: {RUNTIME.index_dir} / {RUNTIME.index_name}\n"
+        f"Qdrant collection: {RUNTIME.qdrant_collection}; Elasticsearch index: {RUNTIME.es_index}\n"
         "Поддерживаемый формат на следующем этапе: .docx"
     )
     return message, status
@@ -354,8 +357,8 @@ def build_demo() -> gr.Blocks:
             with gr.Row(equal_height=True):
                 with gr.Column(scale=3, elem_classes=["status-card"]):
                     gr.Markdown(
-                        f"**Индекс:** `{RUNTIME.index_name}`  \n"
-                        f"**Каталог:** `{RUNTIME.index_dir}`  \n"
+                        f"**Qdrant collection:** `{RUNTIME.qdrant_collection}`  \n"
+                        f"**Elasticsearch index:** `{RUNTIME.es_index}`  \n"
                         f"**Retriever по умолчанию:** `top_k={RUNTIME.top_k}`"
                     )
                 with gr.Column(scale=2, elem_classes=["status-card"]):

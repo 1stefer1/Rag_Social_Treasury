@@ -30,7 +30,7 @@ jobs:
       - name: Ruff lint
         run: uv run ruff check src tests main.py
       - name: Mypy
-        run: uv run mypy src/settings src/schemas src/api src/utils/generator.py src/utils/output_guard.py
+        run: uv run mypy src
 
   tests:
     name: Tests (${{ matrix.kind }})

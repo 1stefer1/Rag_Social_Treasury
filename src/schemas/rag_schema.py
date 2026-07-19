@@ -97,8 +97,8 @@ class AskResponse(BaseModel):
 
 
 class ConfigResponse(BaseModel):
-    index_dir: str
-    index_name: str
+    qdrant_collection: str
+    es_index: str
     top_k: int
     llm_provider: str
     llm_model: str

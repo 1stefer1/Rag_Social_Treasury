@@ -1,173 +1,230 @@
-# RAG для нормативно-правовой базы социальной поддержки
+# RAG Social Treasury
 
-Production-oriented RAG-сервис для поиска и генерации ответов по русскоязычным нормативно-правовым документам. Проект демонстрирует полный NLP-контур: разбор DOCX, построение индекса, hybrid retrieval, reranking, grounded generation, API/UI-интеграции и offline evaluation.
+Сервис отвечает на вопросы по русскоязычной базе нормативных документов. Поиск строится из двух независимых веток: семантический поиск в Qdrant и BM25-поиск в Elasticsearch. Результаты объединяются через Reciprocal Rank Fusion (RRF), после чего cross-encoder reranker выбирает фрагменты для LLM.
 
-> Репозиторий не содержит исходных пользовательских документов, весов моделей, FAISS-индексов и экспериментальных XLSX. Их нужно подготовить локально. Это намеренное ограничение для безопасной публичной публикации.
-
-## Возможности
-
-- DOCX → структурированные JSON-чанки с метаданными;
-- multilingual E5 embeddings и FAISS cosine search;
-- опциональный BM25 hybrid retrieval и cross-encoder reranking;
-- Ollama либо OpenAI-compatible LLM (включая vLLM/gateway);
-- FastAPI endpoints для health, readiness, search и ask;
-- Gradio UI, Telegram profile и отдельный Elasticsearch search API;
-- RAGAS/MLflow evaluation profile без вымышленных benchmark-результатов;
-- typed settings, structured JSON logs, pytest, Ruff, mypy, secret scanning и Docker CI.
-
-## Архитектура
+## Как проходит запрос
 
 ```mermaid
 flowchart LR
-    DOCX["Локальные DOCX"] --> PARSE["Parser + chunking"]
-    PARSE --> JSON["JSON chunks + metadata"]
-    JSON --> EMB["E5 embeddings"]
-    EMB --> FAISS["FAISS index"]
-    JSON --> ES["Elasticsearch (optional)"]
-
-    USER["API / Gradio / Telegram"] --> RET["Retriever"]
-    FAISS --> RET
-    RET --> BM25["BM25 fusion (optional)"]
-    BM25 --> RERANK["Cross-encoder (optional)"]
-    RERANK --> PROMPT["Grounded prompt"]
-    PROMPT --> LLM["Ollama or OpenAI-compatible LLM"]
-    LLM --> GUARD["Language / no-answer guard"]
-    GUARD --> USER
+    Q["Вопрос"] --> E["E5 query embedding"]
+    E --> QD["Qdrant: dense top-k"]
+    Q --> ES["Elasticsearch: BM25 top-k"]
+    QD --> RRF["Reciprocal Rank Fusion"]
+    ES --> RRF
+    RRF --> RR["Cross-encoder reranker"]
+    RR --> P["Контекст и prompt"]
+    P --> LLM["LLM"]
+    LLM --> A["Ответ и источники"]
 ```
 
-Основной runtime собирается в `src/utils/rag_runtime.py`. Модели и индекс инициализируются лениво при первом endpoint, которому нужен retrieval; `/health` и импорт приложения остаются лёгкими. Prompt является production-логикой в `src/utils/rag_pipeline.py`. Внешние документы считаются недоверенным содержимым: модель должна использовать их как факты, а не как инструкции.
+Dense- и sparse-поиск выполняются параллельно. RRF использует позиции документов в выдаче, а не исходные scores: cosine similarity Qdrant и BM25 score Elasticsearch нельзя корректно складывать напрямую. Reranker применяется после fusion и работает с общим пулом кандидатов.
+
+При индексации один набор чанков записывается в оба хранилища:
+
+```mermaid
+flowchart LR
+    J["data/chunks_json/*.json"] --> N["Нормализация chunk_id и metadata"]
+    N --> M["E5 document embeddings"]
+    M --> Q["Qdrant"]
+    N --> E["Elasticsearch"]
+```
 
 ## Стек
 
-Python 3.12, FastAPI, Pydantic Settings, SentenceTransformers, PyTorch CPU, FAISS, rank-bm25, Elasticsearch 8, httpx, Gradio, python-telegram-bot, pytest, Ruff, mypy, uv, Docker/Compose, RAGAS и MLflow.
+- Python 3.12, FastAPI, Pydantic Settings;
+- SentenceTransformers и multilingual E5 embeddings;
+- Qdrant 1.18 для dense vectors;
+- Elasticsearch 8.15 для BM25;
+- cross-encoder reranker;
+- Ollama или OpenAI-compatible LLM endpoint;
+- pytest, Ruff, mypy, pre-commit;
+- Docker Compose и GitHub Actions;
+- MLflow и RAGAS в optional evaluation profile.
 
-## Быстрый старт
+## Подготовка данных
 
-Требования: Python 3.12, [uv](https://docs.astral.sh/uv/), Git. Для контейнерного запуска — Docker Engine с Compose v2. Для локальной генерации — Ollama либо доступный OpenAI-compatible endpoint.
+Индексатор читает `data/chunks_json/*.json`. Каждый файл должен содержать JSON-массив:
+
+```json
+[
+  {
+    "doc_id": "benefits-2026",
+    "source_file": "benefits.docx",
+    "section": "Назначение выплаты",
+    "clause": "2.1",
+    "language": "ru",
+    "text": "Назначение выплаты осуществляет ..."
+  }
+]
+```
+
+Обязателен только непустой `text`. Поля metadata используются в источниках и фильтрах. `chunk_id` формируется детерминированно из идентификатора документа, файла, пункта и позиции чанка.
+
+## Запуск через Docker Compose
+
+Скопируйте настройки и при необходимости измените LLM endpoint:
 
 ```bash
-git clone <repository-url>
-cd rag_project
-uv sync --group dev
 cp .env.example .env
 ```
 
-На Windows используйте `Copy-Item .env.example .env`.
+Запустите хранилища:
 
-Поместите разрешённые к использованию документы в `data/raw_docx/`, затем подготовьте чанки существующим ingestion-кодом и индекс:
+```bash
+docker compose up -d qdrant elasticsearch
+```
+
+Постройте оба индекса из `data/chunks_json`:
+
+```bash
+docker compose --profile indexing run --rm indexer
+```
+
+Запустите API и интерфейс:
+
+```bash
+docker compose up -d rag-api es-search-api gradio-ui
+```
+
+Сервисы:
+
+- RAG API: `http://localhost:8000/docs`;
+- Gradio: `http://localhost:7860`;
+- Qdrant dashboard: `http://localhost:6333/dashboard`;
+- Elasticsearch: `http://localhost:9200`;
+- отдельный Elasticsearch API: `http://localhost:8010/docs`.
+
+Для локальной LLM через Ollama:
+
+```bash
+docker compose --profile ollama up -d ollama
+docker compose exec ollama ollama pull qwen2.5:7b-instruct
+```
+
+После этого задайте в `.env` `LLM_PROVIDER=ollama`.
+
+## Локальный запуск Python
+
+Установите [uv](https://docs.astral.sh/uv/) и зависимости:
+
+```bash
+uv sync --group dev
+```
+
+Qdrant и Elasticsearch всё равно должны быть доступны. Для хранилищ из Compose установите локальные адреса:
+
+```bash
+QDRANT_URL=http://localhost:6333
+ES_URL=http://localhost:9200
+```
+
+Постройте индексы и запустите API:
 
 ```bash
 uv run python scripts/build_index.py
+uv run uvicorn main:app --reload
 ```
 
-`scripts/build_index.py` ожидает подготовленные JSON-чанки в `data/chunks_json/`. Парсер находится в `src/utils/process.py`; формат и источник данных зависят от конкретной поставки и не публикуются вместе с кодом.
+В PowerShell переменные задаются через `$env:QDRANT_URL` и `$env:ES_URL`.
 
-Запуск API:
+## Основные настройки
+
+| Переменная | Назначение | Значение по умолчанию |
+|---|---|---|
+| `QDRANT_URL` | Qdrant REST endpoint | `http://localhost:6333` |
+| `QDRANT_COLLECTION` | dense collection | `moscow_kb` |
+| `ES_URL` | Elasticsearch endpoint | `http://localhost:9200` |
+| `ES_INDEX` | BM25 index | `kb_chunks` |
+| `DENSE_CANDIDATES_K` | кандидаты из Qdrant | `50` |
+| `SPARSE_CANDIDATES_K` | кандидаты из Elasticsearch | `50` |
+| `RRF_K` | константа RRF | `60` |
+| `USE_RERANKER` | включить cross-encoder | `true` |
+| `RERANKER_CANDIDATES_K` | размер пула reranker | `50` |
+| `TOP_K` | итоговое число фрагментов | `5` |
+| `LLM_PROVIDER` | `ollama` или OpenAI-compatible endpoint | `ollama` локально |
+| `API_SECRET` | Bearer token API | обязателен при `APP_ENV=production` |
+
+Полный набор безопасных примеров находится в `.env.example`.
+
+## Пример запроса
 
 ```bash
-uv run uvicorn main:app --host 0.0.0.0 --port 8000
-```
-
-Проверка:
-
-```bash
-curl http://localhost:8000/api/v1/health
 curl -X POST http://localhost:8000/api/v1/search \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $API_SECRET" \
-  -d '{"query":"единовременная денежная выплата","top_k":5}'
+  -d '{"query":"кто назначает выплату", "top_k":5}'
 ```
 
-Swagger UI: `http://localhost:8000/docs`. Если `API_SECRET` пуст в development/test, auth отключён. В production секрет обязателен.
-
-## Конфигурация
-
-Все runtime-параметры описаны в `.env.example` и валидируются `src/settings/config.py`. Основные группы:
-
-- `APP_ENV`, `LOG_LEVEL`, `API_SECRET` — профиль, logging и API auth;
-- `INDEX_*`, `TOP_K`, `USE_BM25`, `USE_RERANKER` — retrieval;
-- `LLM_PROVIDER`, `OPENAI_*`, `OLLAMA_*`, `LLM_TIMEOUT` — generation;
-- `ES_*`, `GRADIO_*`, `TELEGRAM_BOT_TOKEN` — интеграции.
-
-Никогда не коммитьте `.env`. `OPENAI_API_KEY` может быть пустым только для gateway, который не требует auth. В production используйте secret manager платформы.
-
-## Docker Compose
-
-После локального построения `data/faiss_index`:
+Генерация ответа:
 
 ```bash
-docker compose config --quiet
-docker compose up --build rag-api
-docker compose up --build
+curl -X POST http://localhost:8000/api/v1/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question":"Кто назначает выплату?", "top_k":5}'
 ```
 
-Второй вариант запускает API, Elasticsearch search API и Gradio. Профили:
+Если задан `API_SECRET`, добавьте `Authorization: Bearer <token>`.
 
-```bash
-docker compose --profile ollama up --build
-docker compose --profile telegram up --build telegram-bot
-```
-
-Образ собирается из `uv.lock`, использует CPU-only PyTorch, multi-stage build и непривилегированного пользователя. Данные монтируются read-only и не попадают в build context.
-
-## Проверки разработчика
+## Проверки
 
 ```bash
 uv run ruff format --check src tests main.py
 uv run ruff check src tests main.py
-uv run mypy src/settings src/schemas src/api src/utils/generator.py src/utils/output_guard.py
+uv run mypy src/settings src/schemas src/api src/utils
 uv run pytest -m unit
 uv run pytest -m integration
-uv run pre-commit run --all-files
 docker compose config --quiet
 docker build --target runtime -t rag-kb-service:local .
 ```
 
-Evaluation-зависимости отделены от runtime:
+Локальные hooks:
 
 ```bash
-uv sync --group dev --extra evaluation
-uv run python scripts/eval_ragas_stage1.py --help
+uv run pre-commit install
+uv run pre-commit run --all-files
 ```
 
-Методика и ограничения описаны в [docs/evaluation.md](docs/evaluation.md). Репозиторий намеренно не заявляет метрики без воспроизводимого публичного набора данных.
-
-## CI
-
-GitHub Actions на `push` и `pull_request` выполняет format/lint/type checks, раздельные unit/integration tests, smoke import, detect-secrets + Gitleaks, контроль крупных файлов, Compose validation и BuildKit build с GHA cache. CD не добавлен: публикацию образа следует подключать только после выбора registry, политики тегов, SBOM/signing и целевого окружения.
+CI выполняет format/lint/type checks, unit и integration tests, secret scan, проверку размера отслеживаемых файлов, Compose validation и сборку Docker image.
 
 ## Структура
 
 ```text
-.
-├── .github/workflows/ci.yml
-├── docs/                       # evaluation и engineering decisions
-├── scripts/                    # ingestion/evaluation/diagnostic CLI
-├── src/
-│   ├── api/                    # FastAPI routers, middleware, schemas boundary
-│   ├── integrations/           # Elasticsearch, Gradio, Telegram
-│   ├── schemas/                # API contracts
-│   ├── settings/               # validated runtime configuration
-│   └── utils/                  # embedding, retrieval, generation, RAG, evaluation
-├── tests/unit
-├── tests/integration
-├── Dockerfile
-├── docker-compose.yml
-├── pyproject.toml
-└── uv.lock
+src/
+├── api/                    FastAPI endpoints и middleware
+├── integrations/           Gradio, Telegram, Elasticsearch API
+├── schemas/                API-схемы
+├── settings/               типизированная конфигурация
+└── utils/
+    ├── embedder.py         E5 embeddings
+    ├── vector_store.py     Qdrant adapter
+    ├── sparse_store.py     Elasticsearch BM25 adapter
+    ├── retriever.py        parallel retrieval, RRF, reranking
+    ├── rag_pipeline.py     prompt и сборка контекста
+    └── generator.py        LLM client
+scripts/
+├── build_index.py          rebuild Qdrant и Elasticsearch
+└── eval_ragas_stage1.py    offline evaluation
+tests/
+├── unit/
+└── integration/
 ```
 
-## Инженерные компромиссы и ограничения
+## Evaluation
 
-- FAISS — локальный single-process индекс; нет multi-tenant namespace и online update transaction.
-- Elasticsearch реализован отдельным lexical-search сервисом и пока не включён в единый production retrieval policy.
-- Prompt имеет явный `legal-rag-v1`, но пока хранится в коде без внешнего registry; изменение требует regression eval.
-- Language guard иногда делает второй LLM-вызов, увеличивая latency и cost.
-- Нет публичного обезличенного gold dataset, поэтому CI проверяет контракты, но не semantic quality threshold.
-- Юридические ответы не заменяют консультацию специалиста; source freshness и право публикации документов должны проверяться владельцем поставки.
+Каркас offline-оценки находится в `scripts/eval_ragas_stage1.py`, описание протокола — в `docs/evaluation.md`. Перед сравнением конфигураций нужно фиксировать corpus snapshot, embedding model, candidate limits, `RRF_K`, reranker, prompt version и LLM model. В проекте не заявлены численные результаты без воспроизводимого набора данных.
 
-Следующие шаги: prompt registry, tenant-scoped indices, request/trace IDs, retrieval and generation latency metrics, reproducible anonymized eval fixture, quality gates, SBOM + image signing и controlled registry publication.
+## Ограничения
 
-## Участие, безопасность и лицензия
+- Rebuild Qdrant и Elasticsearch не является распределённой транзакцией. При сбое индексатор нужно запустить повторно.
+- Compose-конфигурация привязывает порты хранилищ к localhost и рассчитана на локальную разработку. Для внешнего deployment нужны TLS, аутентификация Qdrant/Elasticsearch и управление секретами вне `.env`.
+- API-фильтры metadata сейчас применяются после retrieval; для больших коллекций их следует перенести в Qdrant payload filters и Elasticsearch bool filters.
+- Коллекция и индекс общие. Для multi-tenant режима необходим обязательный `tenant_id` в payload и фильтрах обеих веток.
+- При недоступности одного из retrieval backends запрос завершается ошибкой; degraded dense-only/sparse-only policy пока не определена.
+- Изменение retrieval-параметров требует offline evaluation, поскольку оно меняет состав контекста для LLM.
 
-См. [CONTRIBUTING.md](CONTRIBUTING.md) и [SECURITY.md](SECURITY.md). Код распространяется по MIT License; права на документы, модели и внешние данные этой лицензией не предоставляются.
+## Развитие
+
+Ближайшие инженерные задачи: tenant isolation, versioned collections с atomic alias switch, retrieval metrics, трассировка по request ID, regression dataset для CI и публикация контейнера в registry после прохождения quality gates.
+
+## Участие и безопасность
+
+Правила разработки описаны в `CONTRIBUTING.md`, сообщения об уязвимостях — в `SECURITY.md`. Код распространяется по лицензии MIT (`LICENSE`).

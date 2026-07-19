@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from pydantic import ValidationError
 
@@ -9,19 +7,19 @@ from src.settings.config import Settings
 
 
 @pytest.mark.unit
-def test_settings_parse_and_validate_runtime_values(tmp_path: Path) -> None:
+def test_settings_parse_and_validate_runtime_values() -> None:
     settings = Settings(
         _env_file=None,
         app_env="test",
-        index_dir=tmp_path,
+        qdrant_url="http://qdrant:6333",
         top_k="7",
-        use_bm25="true",
+        dense_candidates_k="30",
         llm_provider="ollama",
     )
 
-    assert settings.index_dir == tmp_path
+    assert settings.qdrant_url == "http://qdrant:6333"
     assert settings.top_k == 7
-    assert settings.use_bm25 is True
+    assert settings.dense_candidates_k == 30
 
 
 @pytest.mark.unit
