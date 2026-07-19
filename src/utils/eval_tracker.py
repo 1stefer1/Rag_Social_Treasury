@@ -10,7 +10,6 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 import matplotlib.pyplot as plt
 
-
 _PRIMARY_METRICS = (
     "faithfulness",
     "answer_relevance",
@@ -131,7 +130,12 @@ def create_history_report(
         ax.set_xlabel("Mean score")
         ax.set_xlim(0.0, max(values) * 1.15 if values else 1.0)
         for bar, value in zip(bars, values[::-1]):
-            ax.text(bar.get_width() + 0.01, bar.get_y() + bar.get_height() / 2, f"{value:.3f}", va="center")
+            ax.text(
+                bar.get_width() + 0.01,
+                bar.get_y() + bar.get_height() / 2,
+                f"{value:.3f}",
+                va="center",
+            )
         fig.tight_layout()
         fig.savefig(output_dir / "faithfulness_leaderboard.png", dpi=180, bbox_inches="tight")
         plt.close(fig)
@@ -165,8 +169,16 @@ def create_history_report(
         for row in main_chart_rows:
             x_val = _safe_float(row.get("answer_relevance")) or 0.0
             y_val = _safe_float(row.get("faithfulness")) or 0.0
-            size = 250 + 1200 * ((_safe_float(row.get("context_relevance")) or 0.0))
-            ax.scatter(x_val, y_val, s=size, alpha=0.75, color="#F67280", edgecolors="#2A363B", linewidths=0.8)
+            size = 250 + 1200 * (_safe_float(row.get("context_relevance")) or 0.0)
+            ax.scatter(
+                x_val,
+                y_val,
+                s=size,
+                alpha=0.75,
+                color="#F67280",
+                edgecolors="#2A363B",
+                linewidths=0.8,
+            )
             ax.text(x_val + 0.005, y_val + 0.005, row["hypothesis_name"], fontsize=9)
         ax.set_xlim(0.0, 1.0)
         ax.set_ylim(0.0, 1.0)
@@ -289,18 +301,28 @@ class EvalTracker:
                     or _safe_float(summary_metrics.get(f"{name}_mean")),
                 )
                 for name in _PRIMARY_METRICS
-                if (_safe_float(summary_metrics.get(name)) or _safe_float(summary_metrics.get(f"{name}_mean"))) is not None
+                if (
+                    _safe_float(summary_metrics.get(name))
+                    or _safe_float(summary_metrics.get(f"{name}_mean"))
+                )
+                is not None
             ]
             if primary:
                 fig, ax = plt.subplots(figsize=(10, 6))
                 labels = [name.replace("_", " ").title() for name, _ in primary]
                 values = [float(value) for _, value in primary if value is not None]
-                bars = ax.bar(labels, values, color=["#355C7D", "#6C5B7B", "#C06C84", "#F67280", "#99B898"][: len(values)])
+                bars = ax.bar(
+                    labels,
+                    values,
+                    color=["#355C7D", "#6C5B7B", "#C06C84", "#F67280", "#99B898"][: len(values)],
+                )
                 ax.set_ylim(0.0, 1.05)
                 ax.set_title("Eval Metrics")
                 ax.set_ylabel("Mean score")
                 for bar, value in zip(bars, values):
-                    ax.text(bar.get_x() + bar.get_width() / 2, value + 0.02, f"{value:.3f}", ha="center")
+                    ax.text(
+                        bar.get_x() + bar.get_width() / 2, value + 0.02, f"{value:.3f}", ha="center"
+                    )
                 fig.tight_layout()
                 fig.savefig(plots_dir / "eval_metrics.png", dpi=180, bbox_inches="tight")
                 plt.close(fig)
@@ -317,19 +339,29 @@ class EvalTracker:
             ]
             if latency_points:
                 fig, ax = plt.subplots(figsize=(9, 5))
-                labels = [key.replace("_latency_mean_ms", "").replace("_", " ").title() for key, _ in latency_points]
+                labels = [
+                    key.replace("_latency_mean_ms", "").replace("_", " ").title()
+                    for key, _ in latency_points
+                ]
                 values = [float(value) for _, value in latency_points if value is not None]
                 bars = ax.bar(labels, values, color="#355C7D")
                 ax.set_title("Pipeline Latency")
                 ax.set_ylabel("Mean latency, ms")
                 for bar, value in zip(bars, values):
-                    ax.text(bar.get_x() + bar.get_width() / 2, value + max(values) * 0.03, f"{value:.1f}", ha="center")
+                    ax.text(
+                        bar.get_x() + bar.get_width() / 2,
+                        value + max(values) * 0.03,
+                        f"{value:.1f}",
+                        ha="center",
+                    )
                 fig.tight_layout()
                 fig.savefig(plots_dir / "latency.png", dpi=180, bbox_inches="tight")
                 plt.close(fig)
 
             for metric_name in ("faithfulness", "answer_relevance", "context_relevance"):
-                worst_rows = _top_rows_by_metric(rows, metric_name, limit=worst_case_limit, reverse=False)
+                worst_rows = _top_rows_by_metric(
+                    rows, metric_name, limit=worst_case_limit, reverse=False
+                )
                 if not worst_rows:
                     continue
                 stem = _safe_filename(metric_name)

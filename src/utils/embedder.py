@@ -6,7 +6,6 @@ from typing import Iterable, List, Literal, Optional
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
-
 EmbeddingInputType = Literal["document", "query"]
 
 
@@ -66,11 +65,10 @@ class Embedder:
         input_type: EmbeddingInputType = "document",
     ) -> np.ndarray:
         is_single = isinstance(texts, str)
-        if is_single:
-            texts = [texts]
+        normalized_texts = [texts] if isinstance(texts, str) else list(texts)
         vectors = await asyncio.to_thread(
             self.embed,
-            texts,
+            normalized_texts,
             input_type=input_type,
         )
         if is_single:

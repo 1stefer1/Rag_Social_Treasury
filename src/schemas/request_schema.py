@@ -1,6 +1,4 @@
-from typing import Dict, List
-
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel
 
 
 class HelloWorldBodySchema(BaseModel):

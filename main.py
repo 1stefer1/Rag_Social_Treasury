@@ -5,6 +5,9 @@ from fastapi.openapi.utils import get_openapi
 from src.api.middlewares.authorization import authorization
 from src.api.routers.router import router
 from src.settings.config import settings
+from src.utils.logger import configure_logging
+
+configure_logging(settings.log_level)
 
 app = FastAPI(title="RAG Knowledge Base Service", version="0.1.0")
 
@@ -23,16 +26,14 @@ def custom_openapi():
         routes=app.routes,
     )
 
-    schema.setdefault("components", {}).setdefault("securitySchemes", {})[
-        "BearerAuth"
-    ] = {
+    schema.setdefault("components", {}).setdefault("securitySchemes", {})["BearerAuth"] = {
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "API_SECRET",
         "description": "Введите API_SECRET. Пример: change-me",
     }
 
-    if settings.api_secret:
+    if settings.api_secret_value:
         for path, methods in schema.get("paths", {}).items():
             if path in {"/api/v1/health", "/api/v1/ready"}:
                 continue
@@ -47,4 +48,4 @@ def custom_openapi():
 app.openapi = custom_openapi
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=settings.rag_api_port)

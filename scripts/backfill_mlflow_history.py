@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
-import sys
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
@@ -75,7 +74,9 @@ def _load_summary(path: Path) -> Optional[Dict[str, Any]]:
         return None
 
     summary_sheet = wb["summary"]
-    header = [cell for cell in next(summary_sheet.iter_rows(min_row=1, max_row=1, values_only=True))]
+    header = [
+        cell for cell in next(summary_sheet.iter_rows(min_row=1, max_row=1, values_only=True))
+    ]
     header_map = {str(name).strip(): idx for idx, name in enumerate(header) if name is not None}
     metric_idx = header_map.get("metric", 0)
     mean_idx = header_map.get("mean", 1)
@@ -157,7 +158,15 @@ def main() -> int:
             {
                 key: value
                 for key, value in summary.items()
-                if key in {"faithfulness", "answer_relevance", "context_precision", "context_recall", "context_relevance", "rows_evaluated"}
+                if key
+                in {
+                    "faithfulness",
+                    "answer_relevance",
+                    "context_precision",
+                    "context_recall",
+                    "context_relevance",
+                    "rows_evaluated",
+                }
             }
         )
         tracker.log_artifact_file(path, artifact_path="historical_xlsx")

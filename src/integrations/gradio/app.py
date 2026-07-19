@@ -2,22 +2,22 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from typing import Any, Dict, List, Tuple
 
 import gradio as gr
 import httpx
 
+from src.settings.config import get_settings
+from src.utils.output_guard import build_russian_rewrite_prompt, looks_non_russian
 from src.utils.rag_pipeline import VanillaRAG
 from src.utils.rag_runtime import create_rag_runtime
 
 logger = logging.getLogger(__name__)
 
-RUNTIME = create_rag_runtime()
+settings = get_settings()
+RUNTIME = create_rag_runtime(settings)
 NO_ANSWER_TEXT = "В предоставленном контексте нет информации для ответа."
-ES_SEARCH_API_URL = os.environ.get("ES_SEARCH_API_URL", "http://localhost:8010").rstrip(
-    "/"
-)
+ES_SEARCH_API_URL = settings.es_search_api_url.rstrip("/")
 
 CUSTOM_CSS = """
 .gradio-container {
@@ -189,27 +189,54 @@ async def _ask_async(
         candidate_k = max(candidate_k, int(top_k) * 6)
 
     chunks = await RUNTIME.retriever.aretrieve(question, top_k=candidate_k)
-    if enable_metadata_filters:
-        chunks = [c for c in chunks if _matches_metadata(c.meta or {}, filters)]
-        chunks = chunks[: int(top_k)]
+    try:
+        if enable_metadata_filters:
+            chunks = [c for c in chunks if _matches_metadata(c.meta or {}, filters)]
+            chunks = chunks[: int(top_k)]
 
-        if not chunks:
-            return _build_no_answer_ui(
-                "Переформулируйте запрос, снимите часть фильтров или обратитесь напрямую в техподдержку."
+            if not chunks:
+                return _build_no_answer_ui(
+                    "Переформулируйте запрос, снимите часть фильтров или обратитесь напрямую в техподдержку."
+                )
+
+            prompt, used_chunks = RUNTIME.rag._build_prompt(question, chunks)
+            answer = await RUNTIME.llm.arun(prompt, temperature=0.0, max_tokens=700)
+            answer = (answer or "").strip()
+            if looks_non_russian(answer):
+                try:
+                    answer_ru = await RUNTIME.llm.arun(
+                        build_russian_rewrite_prompt(answer),
+                        temperature=0.0,
+                        max_tokens=500,
+                    )
+                    answer = (answer_ru or "").strip()
+                except httpx.HTTPError:
+                    logger.warning("Russian rewrite step failed in Gradio Ask flow")
+            sources = VanillaRAG.format_sources(
+                [RUNTIME.rag._to_source_ref(c) for c in used_chunks]
             )
-
-        prompt, used_chunks = RUNTIME.rag._build_prompt(question, chunks)
-        answer = await RUNTIME.llm.arun(prompt, temperature=0.0, max_tokens=700)
-        answer = (answer or "").strip()
-        sources = VanillaRAG.format_sources(
-            [RUNTIME.rag._to_source_ref(c) for c in used_chunks]
+            used_top_k = len(used_chunks)
+        else:
+            result = await RUNTIME.rag.aask(question, top_k=int(top_k))
+            answer = result.answer.strip()
+            if looks_non_russian(answer):
+                try:
+                    answer_ru = await RUNTIME.llm.arun(
+                        build_russian_rewrite_prompt(answer),
+                        temperature=0.0,
+                        max_tokens=500,
+                    )
+                    answer = (answer_ru or "").strip()
+                except httpx.HTTPError:
+                    logger.warning("Russian rewrite step failed in Gradio Ask flow")
+            sources = VanillaRAG.format_sources(result.sources)
+            used_top_k = result.used_top_k
+    except httpx.HTTPError:
+        logger.exception("LLM backend unavailable during Gradio Ask flow")
+        return (
+            "Сервис генерации временно недоступен. Попробуйте повторить запрос через 1-2 минуты.",
+            "",
         )
-        used_top_k = len(used_chunks)
-    else:
-        result = await RUNTIME.rag.aask(question, top_k=int(top_k))
-        answer = result.answer.strip()
-        sources = VanillaRAG.format_sources(result.sources)
-        used_top_k = result.used_top_k
 
     if _is_no_answer_response(answer):
         return _build_no_answer_ui(
@@ -351,9 +378,7 @@ def build_demo() -> gr.Blocks:
                         placeholder="Например: единовременная денежная выплата",
                         lines=2,
                     )
-                    search_button = gr.Button(
-                        "Искать по базе знаний", variant="primary"
-                    )
+                    search_button = gr.Button("Искать по базе знаний", variant="primary")
                     search_table = gr.Dataframe(
                         headers=[
                             "score",
@@ -452,9 +477,7 @@ def build_demo() -> gr.Blocks:
                         es_appendix = gr.Textbox(
                             label="Приложение", placeholder="Например: Приложение 1"
                         )
-                        es_section = gr.Textbox(
-                            label="Раздел", placeholder="Например: Раздел I"
-                        )
+                        es_section = gr.Textbox(label="Раздел", placeholder="Например: Раздел I")
 
                     es_button = gr.Button("Искать в Elasticsearch", variant="primary")
                     es_table = gr.Dataframe(
@@ -509,8 +532,8 @@ def main() -> None:
         format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
     )
 
-    host = os.environ.get("GRADIO_HOST", "127.0.0.1")
-    port = int(os.environ.get("GRADIO_PORT", "7860"))
+    host = settings.gradio_host
+    port = settings.gradio_port
     demo = build_demo()
     logger.info("Gradio UI запускается на %s:%s", host, port)
     demo.launch(

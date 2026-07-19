@@ -35,6 +35,7 @@ class OllamaRagasLLM(BaseRagasLLM):
     )
 
     multiple_completion_supported: bool = field(default=False, repr=False)
+
     def _chat_once(
         self,
         user_prompt: str,
@@ -121,9 +122,7 @@ class OllamaRagasLLM(BaseRagasLLM):
         # Ollama doesn't support n completions in one request; run sequentially.
         outs: List[str] = []
         for _ in range(n):
-            outs.append(
-                await self._achat_once(text, temperature=float(temperature), stop=stop)
-            )
+            outs.append(await self._achat_once(text, temperature=float(temperature), stop=stop))
         gens = [Generation(text=o) for o in outs]
         return LLMResult(generations=[gens])
 

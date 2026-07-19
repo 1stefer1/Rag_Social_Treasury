@@ -13,13 +13,9 @@ async def hello_world(request: Request):
         body = HelloWorldBodySchema(**body)
     except ValidationError as e:
         logger.warning(f"Validation error: {e}")
-        raise HTTPException(
-            status_code=400, detail=f"Invalid request data: {e.errors()}"
-        )
+        raise HTTPException(status_code=400, detail=f"Invalid request data: {e.errors()}") from e
     except Exception as e:
         logger.error(f"Unexpected error during validation: {e}")
-        raise HTTPException(status_code=400, detail="Invalid request format")
+        raise HTTPException(status_code=400, detail="Invalid request format") from e
 
-    return {
-        "answer": f"Hello world from RAG project template. Your message is : {body.text}"
-    }
+    return {"answer": f"Hello world from RAG project template. Your message is : {body.text}"}
