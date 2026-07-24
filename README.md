@@ -208,7 +208,4 @@ tests/
 └── integration/
 ```
 
-## Evaluation
-
-Каркас offline-оценки находится в `scripts/eval_ragas_stage1.py`, описание протокола — в `docs/evaluation.md`. Перед сравнением конфигураций нужно фиксировать corpus snapshot, embedding model, candidate limits, `RRF_K`, reranker, prompt version и LLM model. В проекте не заявлены численные результаты без воспроизводимого набора данных.
 
